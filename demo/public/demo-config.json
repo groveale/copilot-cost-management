@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "tenantId": "d8464949-bb1d-476f-bbe8-a46293833f6d",
+  "clientId": "e4b3e7ed-9827-4b77-bd8a-dc50e4447528",
+  "serviceId": "cowork",
+  "budgets": [
+    {
+      "id": "legal",
+      "displayName": "Legal",
+      "businessArea": "Legal",
+      "costCenter": "Not specified",
+      "owners": ["admin@m365cpi77517573.onmicrosoft.com"],
+      "tiers": {
+        "standard": {
+          "policyId": "04105cbc-7710-49f8-82bc-ccd7785a3a79",
+          "groupId": "d5aeaa9a-3900-444a-90be-3f5b4253fb07"
+        },
+        "enhanced": {
+          "policyId": "25bf2770-b0df-4cc3-9266-6596f82c4e1a",
+          "groupId": "cb8c2cd0-cea5-4b3c-aae5-de1c6dec7238"
+        }
+      }
+    }
+  ],
+  "requesterIndex": [
+    {
+      "username": "admin@m365cpi77517573.onmicrosoft.com",
+      "budgetId": "legal"
+    },
+    {
+      "username": "legal.requester@example.test",
+      "budgetId": "legal"
+    },
+    {
+      "username": "legal.project@example.test",
+      "budgetId": "legal"
+    }
+  ],
+  "exampleRequests": [
+    {
+      "id": "LEGAL-DEMO-001",
+      "requesterUsername": "legal.requester@example.test",
+      "budgetId": "legal",
+      "justification": "I need the Enhanced allowance for an ongoing contract review workload, including comparing draft agreements and preparing review summaries in Cowork.",
+      "grantKind": "permanent",
+      "requestedAt": "2026-10-20T09:00:00Z"
+    },
+    {
+      "id": "LEGAL-DEMO-002",
+      "requesterUsername": "legal.project@example.test",
+      "budgetId": "legal",
+      "justification": "I need a temporary Enhanced allowance to complete the due diligence review for this month's transaction. The additional workload finishes before the next billing period.",
+      "grantKind": "billingPeriod",
+      "requestedAt": "2026-10-20T10:00:00Z"
+    }
+  ]
+}
