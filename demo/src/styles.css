@@ -68,6 +68,16 @@ p { margin: 0 0 16px; }
 .actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
 .portal-navigation { padding: 16px 0; border-bottom: 1px solid var(--cp-border); }
 .portal-navigation button { min-width: 144px; }
+.owner-workspace { display: grid; gap: 24px; }
+.owner-navigation { margin: 0; }
+.workspace-heading { margin: 0 0 24px; }
+.workspace-heading p { margin-bottom: 0; }
+.business-unit-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 24px; }
+.business-unit-card { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.business-unit-card h3 { margin: 0 0 4px; font-size: 22px; overflow-wrap: anywhere; }
+.business-unit-card p { margin: 0; }
+.business-unit-card .metadata-grid { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.business-unit-card button { margin-top: auto; }
 .setup-panel { margin-top: 24px; }
 .onboarding-workspace { display: grid; gap: 16px; margin-top: 16px; }
 .table-scroll { max-width: 100%; overflow-x: auto; margin-top: 16px; }

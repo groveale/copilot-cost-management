@@ -43,10 +43,21 @@ MSAL v5 redirect bridge and both HTML build entries are required.
   remain visible with the mapped object IDs. API/Graph failures are not replaced
   by an empty inventory. Before initial import, the list explicitly warns that
   portal ownership has not been configured.
-- **Policy owner** retains authorized budgets, Graph details, allowance approvals
-  and budget allocation. Its setup area allows a first or additional BU request
-  and shows the caller's setup history, even when the main workspace has not yet
-  been initialized. It does not expose administrator review or bootstrap tools.
+- **Policy owner** opens on a clean **Business units** list showing only the
+  caller's server-authorized BUs, their cost centres and planning budgets.
+  **View policies** opens one BU's Standard/Enhanced policies, allocation,
+  members and consumption, with a **Back to business units** action. No Graph
+  reads are made for the list, unopened BUs, or simply opening Credit requests.
+- The separate **Credit requests** owner page contains the approval inbox across
+  all owned BUs, with friendly BU names on requests. The **Set up a BU** page holds
+  the new-BU form and setup history; it remains available before budget metadata
+  has been initialized. These pages do not expose admin review/bootstrap tools.
+  URLs use `?view=owner&ownerPage=budgets`, `ownerPage=requests` or
+  `ownerPage=setup`, with `&budget=<budget-id>` for an opened BU. Refresh and browser
+  back/forward restore the selected screen; an unavailable/unowned BU is an
+  explicit error, never substituted with another BU. Switching owner pages
+  clears that page's draft and stops its in-flight reads/actions; partial
+  provisioning/upgrade work remains persisted for explicit recovery.
 - **Request credits** automatically reads the signed-in user's current Graph
   service balance and effective policy, alongside their allowance request and
   history. It shows consumed/remaining credits, configured limits, effective
@@ -110,7 +121,9 @@ MSAL v5 redirect bridge and both HTML build entries are required.
 - Requester identity never comes from form fields, UPNs or browser JSON.
 
 Owners automatically load Graph policy configuration, assigned groups, direct
-members and current user/service consumption for their selected budget. Admin
+members and current user/service consumption **after opening a BU**. Returning
+to a BU after an approval reads fresh Graph data; no policy details are loaded
+alongside the request inbox. Admin
 inventory and approved-budget allocation limits also load on entry. Reads use
 MSAL's cached/silently renewed Graph token; refresh does not force a popup.
 **Grant Graph access** appears only when an automatic read requires user

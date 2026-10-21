@@ -20,6 +20,26 @@ export function portalView(search: string): PortalView {
   return view === "admin" || view === "request" ? view : "owner";
 }
 const viewNames: Record<PortalView, string> = { admin: "Admin", owner: "Policy owner", request: "Request credits" };
+export type OwnerPage = "budgets" | "requests" | "setup";
+export interface OwnerLocation { page: OwnerPage; budgetId?: string }
+export function ownerLocation(search: string): OwnerLocation {
+  const params = new URLSearchParams(search);
+  const page = params.get("ownerPage");
+  if (page === "requests" || page === "setup") return { page };
+  const budgetId = params.get("budget");
+  return { page: "budgets", ...(budgetId ? { budgetId } : {}) };
+}
+const ownerPageNames: Record<OwnerPage, string> = { budgets: "Business units", requests: "Credit requests", setup: "Set up a BU" };
+
+export function OwnerNavigation({ location, onNavigate }: {
+  location: OwnerLocation; onNavigate: (location: OwnerLocation) => void;
+}) {
+  return <nav className="actions owner-navigation" aria-label="Policy owner pages">
+    {(Object.keys(ownerPageNames) as OwnerPage[]).map((page) => <button key={page}
+      className={location.page === page ? "" : "secondary"} aria-pressed={location.page === page}
+      onClick={() => onNavigate({ page })}>{ownerPageNames[page]}</button>)}
+  </nav>;
+}
 
 export function PortalNavigation({ view, isAdmin, onSelect }: {
   view: PortalView; isAdmin: boolean; onSelect: (view: PortalView) => void;
@@ -34,6 +54,7 @@ export function PortalNavigation({ view, isAdmin, onSelect }: {
 export function HostedPortal({ config, auth, initialView }: { config: DemoConfig; auth: DemoAuth; initialView: PortalView }) {
   const [account, setAccount] = useState(auth.account());
   const [view, setView] = useState(initialView);
+  const [owner, setOwner] = useState(() => ownerLocation(typeof window === "undefined" ? "" : window.location.search));
   const [adminSection, setAdminSection] = useState<"requests" | "policies">("requests");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -41,16 +62,19 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
   const [capabilityError, setCapabilityError] = useState("");
   const [context, setContext] = useState<Context | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [graphRefresh, setGraphRefresh] = useState(0);
   const api = useMemo(() => new RequestApi(config.apiBaseUrl ?? "", () => auth.apiToken(account)), [auth, config.apiBaseUrl, account]);
   const onPublished = useCallback(() => setRefresh((value) => value + 1), []);
-  const onUpgradeApplied = useCallback(() => setGraphRefresh((value) => value + 1), []);
   useEffect(() => {
-    const onPopState = () => setView(portalView(window.location.search));
+    const onPopState = () => {
+      setView(portalView(window.location.search));
+      setOwner(ownerLocation(window.location.search));
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-  useEffect(() => { document.title = `Copilot Budget Portal | ${viewNames[view]}`; }, [view]);
+  useEffect(() => {
+    document.title = `Copilot Budget Portal | ${view === "owner" ? `Policy owner | ${ownerPageNames[owner.page]}` : viewNames[view]}`;
+  }, [view, owner.page]);
   useEffect(() => {
     if (!account || busy) return;
     const controller = new AbortController();
@@ -77,8 +101,20 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
   function navigate(next: PortalView) {
     const url = new URL(window.location.href);
     url.searchParams.set("view", next);
+    url.searchParams.delete("ownerPage");
+    url.searchParams.delete("budget");
     window.history.pushState(null, "", url);
     setView(next);
+    setOwner({ page: "budgets" });
+  }
+  function navigateOwner(next: OwnerLocation) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", "owner");
+    url.searchParams.set("ownerPage", next.page);
+    if (next.page === "budgets" && next.budgetId) url.searchParams.set("budget", next.budgetId);
+    else url.searchParams.delete("budget");
+    window.history.pushState(null, "", url);
+    setOwner(next);
   }
 
   async function authenticate(signOut = false) {
@@ -102,11 +138,12 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
     {error && <p className="error" role="alert">{error}</p>}
   </section></main>;
 
+  const workspaceRequired = view === "request" || (view === "owner" && owner.page !== "setup");
   return <main className="shell">
     <header className="masthead"><div><span className="eyebrow">COPILOT BUDGET PORTAL</span>
       <h1>{viewNames[view]}</h1>
       <p className="muted">{view === "admin" ? "Review setup requests and inspect spending-policy ownership." :
-        view === "owner" ? "Your budgets, consumption and employee requests." : "Ask your policy owner for an Enhanced allowance."}</p></div>
+        view === "owner" ? "Browse your business units or review employee credit requests." : "Ask your policy owner for an Enhanced allowance."}</p></div>
       <div className="operator"><p>{account.username}</p><div className="actions">
         <ThemeToggle />
         <button className="secondary" onClick={() => void authenticate()}>Switch account / renew sign-in</button>
@@ -130,28 +167,75 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
           <AdminPolicies key={refresh} api={api} auth={auth} account={account} />}
       </>}
     </>}
-    {view !== "admin" && error && <p className="error" role="alert">{error}</p>}
+    {workspaceRequired && error && <p className="error" role="alert">{error}</p>}
     {view === "request" && <PersonalBalance key={`${account.homeAccountId}:${account.localAccountId}:${refresh}`}
       auth={auth} account={account} serviceId={config.serviceId} />}
-    {view !== "admin" && !context && !error && <p role="status">Loading your authorized workspace...</p>}
-    {view !== "admin" && context && <>
-      <div className="notice">Credit-increase approval applies a Standard-to-Enhanced group move using the owner's delegated Graph access.
-        Failed or partial upgrades require explicit retry. Owners may approve their own requests in this MVP.
-        Temporary increases use the UTC calendar month and require manual return to Standard; no automatic reversion is scheduled.</div>
-      {view === "request" ? <SubmissionForm api={api} context={context} /> : <>
-        {!context.ownedBudgets.length ? <section className="card"><h2>Set up your first spending budget</h2>
-          <p>Request a new business unit below. An administrator must approve the budget before Standard and Enhanced policies are created.
-            If you already manage a policy, ask the administrator to check its owner mapping. No Graph data has been requested.</p></section> :
-          <><RequestList api={api} inbox auth={auth} account={account} serviceId={context.serviceId} onUpgradeApplied={onUpgradeApplied} />
-            <OwnerGraph budgets={context.ownedBudgets} serviceId={context.serviceId} auth={auth} account={account} api={api} refresh={graphRefresh} /></>}
-      </>}
+    {workspaceRequired && !context && !error && <p role="status">Loading your authorized workspace...</p>}
+    {view === "request" && context && <>
+      <CreditApprovalNotice />
+      <SubmissionForm api={api} context={context} />
     </>}
-    {view === "owner" && <details className="card setup-panel" open={!context?.ownedBudgets.length}>
-      <summary>{context?.ownedBudgets.length ? "Request another business unit / view setup requests" : "Request a new BU / set up spending policies"}</summary>
-      <BusinessUnitOnboarding api={api} auth={auth} account={account} mode="owner" capabilities={capabilities} onPublished={onPublished} />
-    </details>}
+    {view === "owner" && <OwnerWorkspace location={owner} onNavigate={navigateOwner} context={context}
+      api={api} auth={auth} account={account} capabilities={capabilities} onPublished={onPublished} />}
     <footer>Evaluation only. Requests are stored privately. Graph preview APIs are not supported for production applications.</footer>
   </main>;
+}
+
+function CreditApprovalNotice() {
+  return <p className="notice">Approval moves the requester from Standard to Enhanced using the owner's delegated Graph access.
+    Failed or partial upgrades require explicit retry. Temporary increases require manual return to Standard at the UTC calendar month boundary.
+    Owners may approve their own requests in this MVP.</p>;
+}
+
+export function BusinessUnitList({ budgets, onNavigate }: {
+  budgets: BudgetConfig[]; onNavigate: (location: OwnerLocation) => void;
+}) {
+  return <section aria-labelledby="business-units-heading">
+    <div className="section-heading workspace-heading"><div><h2 id="business-units-heading">Your business units</h2>
+      <p className="muted">Select a business unit to view its Standard and Enhanced policies.</p></div>
+      <button className="secondary" onClick={() => onNavigate({ page: "setup" })}>Set up a new BU</button>
+    </div>
+    {!budgets.length ? <div className="card"><h3>No business units yet</h3>
+      <p>Set up your first BU to create its Standard and Enhanced policies. An administrator must approve it.
+        If you already manage a BU, ask the administrator to check its owner mapping.</p></div> :
+      <ul className="business-unit-list">{budgets.map((budget) => <li key={budget.id} className="card business-unit-card">
+        <div><h3>{budget.displayName}</h3><p className="small muted">{budget.businessArea}</p></div>
+        <dl className="metadata-grid">
+          <div><dt>Cost centre</dt><dd>{budget.costCenter}</dd></div>
+          <div><dt>Planning budget</dt><dd>{budget.plannedUsd === undefined ? "Not configured" :
+            new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(budget.plannedUsd)}</dd></div>
+          <div><dt>Policies</dt><dd>Standard + Enhanced</dd></div>
+        </dl>
+        <button aria-label={`View policies for ${budget.displayName}`}
+          onClick={() => onNavigate({ page: "budgets", budgetId: budget.id })}>View policies</button>
+      </li>)}</ul>}
+  </section>;
+}
+
+export function OwnerWorkspace({ location, onNavigate, context, api, auth, account, capabilities, onPublished }: {
+  location: OwnerLocation; onNavigate: (location: OwnerLocation) => void; context: Context | null;
+  api: RequestApi; auth: DemoAuth; account: AccountInfo; capabilities: OnboardingCapabilities | null; onPublished: () => void;
+}) {
+  const budget = context?.ownedBudgets.find((item) => item.id === location.budgetId);
+  return <div className="owner-workspace">
+    <OwnerNavigation location={location} onNavigate={onNavigate} />
+    {location.page === "setup" ? <>
+      <div className="workspace-heading"><h2>Set up a business unit</h2>
+        <p className="muted">Request a new BU and follow its setup progress. Employee credit approvals are on the Credit requests page.</p></div>
+      <BusinessUnitOnboarding api={api} auth={auth} account={account} mode="owner" capabilities={capabilities} onPublished={onPublished} />
+    </> : context && (location.page === "requests" ? <>
+      <div className="workspace-heading"><h2>Credit requests</h2>
+        <p className="muted">Review employee allowance requests across all your business units.</p></div>
+      {!context.ownedBudgets.length ? <section className="card"><p>You do not own a business unit yet, so there are no credit requests to review.</p>
+        <button onClick={() => onNavigate({ page: "setup" })}>Set up your first BU</button></section> :
+        <><CreditApprovalNotice /><RequestList api={api} inbox auth={auth} account={account} serviceId={context.serviceId}
+          budgets={context.ownedBudgets} /></>}
+    </> : location.budgetId ? <>
+      <div className="actions"><button className="secondary" onClick={() => onNavigate({ page: "budgets" })}>Back to business units</button></div>
+      {!budget ? <p className="error" role="alert">This business unit is unavailable or you are no longer an owner. Return to your business unit list.</p> :
+        <OwnerGraph key={budget.id} budget={budget} serviceId={context.serviceId} auth={auth} account={account} api={api} />}
+    </> : <BusinessUnitList budgets={context.ownedBudgets} onNavigate={onNavigate} />)}
+  </div>;
 }
 
 function SubmissionForm({ api, context }: { api: RequestApi; context: Context }) {
@@ -204,9 +288,9 @@ function SubmissionForm({ api, context }: { api: RequestApi; context: Context })
   </>;
 }
 
-function RequestList({ api, inbox = false, auth, account, serviceId, onUpgradeApplied }: {
+function RequestList({ api, inbox = false, auth, account, serviceId, budgets }: {
   api: RequestApi; inbox?: boolean; auth?: DemoAuth; account?: AccountInfo; serviceId?: string;
-  onUpgradeApplied?: () => void;
+  budgets?: BudgetConfig[];
 }) {
   const [page, setPage] = useState<Page<RequestRecord>>({ items: [] });
   const [error, setError] = useState("");
@@ -230,16 +314,16 @@ function RequestList({ api, inbox = false, auth, account, serviceId, onUpgradeAp
     {!busy && !error && !page.items.length && <p>No requests found.</p>}
     {page.items.map((record) => <RequestCard key={record.id} record={record} api={api} inbox={inbox}
       auth={auth} account={account} serviceId={serviceId}
-      onUpgradeApplied={onUpgradeApplied}
+      budgetName={budgets?.find((budget) => budget.id === record.budgetId)?.displayName}
       onDecision={(saved) => setPage((prev) => ({ ...prev, items: prev.items.map((r) => r.id === saved.id ? saved : r) }))} />)}
     {page.cursor && <button disabled={busy} onClick={() => void load(page.cursor)}>Load more requests</button>}
   </section>;
 }
 
-export function RequestCard({ record, api, inbox, onDecision, auth, account, serviceId, onUpgradeApplied }: {
+export function RequestCard({ record, api, inbox, onDecision, auth, account, serviceId, budgetName }: {
   record: RequestRecord; api: RequestApi; inbox: boolean; onDecision: (record: RequestRecord) => void;
   auth?: DemoAuth; account?: AccountInfo; serviceId?: string;
-  onUpgradeApplied?: () => void;
+  budgetName?: string;
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -266,7 +350,6 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
         }
         await runFulfilment(api, new GraphClient(() => auth.token(account)), saved, serviceId, current.signal,
           (value) => { if (!current.signal.aborted) onDecision(value); });
-        if (!current.signal.aborted) onUpgradeApplied?.();
       }
     } catch (error) {
       if (!current.signal.aborted) setError(`${approved ? "Approval is saved, but the upgrade is not confirmed. Refresh and retry. " : ""}${message(error)}`);
@@ -276,7 +359,7 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
   const expired = !!record.expiresAt && Date.parse(record.expiresAt) <= Date.now();
   const activeLease = !!record.fulfilment?.lease && Date.parse(record.fulfilment.lease.until) > Date.now();
   return <article className="card"><h3>{statusLabel(record)}</h3>
-    <dl><dt>Request</dt><dd className="mono">{record.id}</dd><dt>Budget</dt><dd>{record.budgetId}</dd>
+    <dl><dt>Request</dt><dd className="mono">{record.id}</dd><dt>Business unit</dt><dd>{budgetName ?? record.budgetId}</dd>
       {inbox && <><dt>Requester object ID</dt><dd className="mono">{record.requesterId}</dd></>}
       <dt>Submitted</dt><dd>{new Date(record.createdAt).toLocaleString()}</dd><dt>Duration</dt>
       <dd>{record.expiresAt ? `Until ${record.expiresAt} (exclusive)` : "Permanent"}</dd></dl>
@@ -301,24 +384,20 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
   </article>;
 }
 
-function OwnerGraph({ budgets, serviceId, auth, account, api, refresh }: {
-  budgets: BudgetConfig[]; serviceId: string; auth: DemoAuth; account: AccountInfo; api: RequestApi;
-  refresh: number;
+function OwnerGraph({ budget, serviceId, auth, account, api }: {
+  budget: BudgetConfig; serviceId: string; auth: DemoAuth; account: AccountInfo; api: RequestApi;
 }) {
-  const [budgetId, setBudgetId] = useState(budgets[0]?.id ?? "");
   const [snapshot, setSnapshot] = useState<BudgetSnapshot | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [needsConsent, setNeedsConsent] = useState(false);
   const [graphReady, setGraphReady] = useState(false);
   const controller = useRef<AbortController | null>(null);
-  const budget = budgets.find((b) => b.id === budgetId);
   useEffect(() => {
     void load();
     return () => controller.current?.abort();
-  }, [budget, auth, account, refresh]);
+  }, [budget, serviceId, auth, account]);
   async function load(interactive = false) {
-    if (!budget) return;
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     setBusy(true); setError(""); setSnapshot(null);
@@ -341,15 +420,14 @@ function OwnerGraph({ budgets, serviceId, auth, account, api, refresh }: {
     }
     finally { if (!current.signal.aborted) setBusy(false); }
   }
-  return <><section className="card"><h2>Live Graph details</h2>
-    <p className="muted">Only your server-authorized budgets are available. Graph uses a separate delegated token and the existing eight owner permissions.</p>
-    <label>Budget <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>
-      {budgets.map((b) => <option key={b.id} value={b.id}>{b.displayName}</option>)}</select></label>
+  return <><section className="card"><span className="eyebrow">BUSINESS UNIT / POLICIES</span><h2>{budget.displayName}</h2>
+    <p className="muted">{budget.businessArea} / Cost centre: {budget.costCenter}</p>
+    <p className="small muted">Standard and Enhanced policy settings, members and current consumption. Readings come directly from Graph and may lag behind membership changes.</p>
     <div className="actions">
-      <button disabled={busy || !budget} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh Graph details"}</button>
+      <button disabled={busy} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh policies"}</button>
       {needsConsent && <button disabled={busy} onClick={() => void load(true)}>Grant Graph access</button>}
     </div>
     {error && <p className="error" role="alert">{error}</p>}
-  </section>{graphReady && budget?.approvedCreditCeiling && <BudgetAllocation key={budget.id} budget={budget} api={api} auth={auth} account={account} onApplied={() => void load()} />}
-    {budget && snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId} />}</>;
+  </section>{graphReady && budget.approvedCreditCeiling && <BudgetAllocation key={budget.id} budget={budget} api={api} auth={auth} account={account} onApplied={() => void load()} />}
+    {snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId} />}</>;
 }

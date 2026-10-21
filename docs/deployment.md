@@ -212,13 +212,13 @@ private-network acceptance before the hosted form can be presented as ready.
 
 ## BU onboarding and browser bootstrap
 
-The signed-in **Policy owner** setup area is independent of budget metadata, so
+The signed-in **Policy owner > Set up a BU** page is independent of budget metadata, so
 ordinary users can submit requests before their BU exists. Ownership comes from
 the API-validated tenant/object ID, never a form field or email. Available token
 name/contact claims are display hints only.
 
 Before the first import, the ordinary workspace returns HTTP 409
-`setup-required` when the metadata blob does not exist. Open **Policy owner**
+`setup-required` when the metadata blob does not exist. Open **Policy owner > Set up a BU**
 to request a BU; a configured administrator can import the initial private JSON
 under **Admin > Setup requests**, then refresh the workspace. Setup remains available without
 that blob. Missing containers, denied access, invalid metadata and other storage
@@ -340,8 +340,15 @@ private seed into the application.
   repeated. Definitive Graph request rejection allows an explicit retry.
   Closing the browser pauses work; resume via the administrator queue after any
   outstanding lease expires. Partial resources are not automatically deleted.
-- Owners see the new budget in their workspace, with Graph data loaded
-  automatically using the cached/silently renewed delegated Graph token. Admin
+- Owners land on a **Business units** list, then select **View policies** to
+  open one BU's policies, allocation, members and consumption. Graph data loads
+  automatically only for the opened BU using the cached/silently renewed
+  delegated token. **Credit requests** is a separate owner page for the approval
+  inbox; **Set up a BU** contains the BU form/history. Browser back/forward and
+  refresh preserve the owner screen (`ownerPage=budgets|requests|setup`) and
+  selected `budget` query parameter. A URL never grants ownership: the requested
+  BU must appear in the API's authorized context before any Graph reads.
+  Admin
   inventory and allocation reads behave the same way. Interactive authorization
   is offered only when silent acquisition requires it, never opened by an
   automatic read. Graph writes remain explicit. Permissions/roles are assumed, not inferred
