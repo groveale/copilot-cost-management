@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Caller, Metadata, PolicyDefaults } from "../src/contracts.js";
 import { ApiError, metadataSchema } from "../src/model.js";
 import { checkAllocation, splitCredits, usdToCredits } from "../src/budget-math.js";
-import { buDecisionSchema, buSubmissionSchema, resourceKeys, type BuDecision, type BuSubmission, type OnboardingRecord, type OnboardingStore } from "../src/onboarding.js";
+import { allocationSchema, buDecisionSchema, buSubmissionSchema, memberUpdateSchema, onboardingRecordSchema, resourceKeys, type BuDecision, type BuSubmission, type OnboardingRecord, type OnboardingStore } from "../src/onboarding.js";
 import { OnboardingService } from "../src/onboarding-service.js";
 
 const id = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -43,6 +43,7 @@ class MemoryStore implements OnboardingStore {
     if (etag !== (this.value ? String(this.metadataRevision) : null)) throw new ApiError(409, "metadata-conflict", "Metadata changed.");
     this.value = structuredClone(value); this.metadataRevision++;
   }
+  async routing(objectId: string) { return this.routes.get(objectId) ?? null; }
   async seedRouting(objectId: string, budgetId: string) {
     if (this.routes.has(objectId) && this.routes.get(objectId) !== budgetId) throw new ApiError(409, "routing-conflict", "Existing routing is different.");
     this.routes.set(objectId, budgetId);
@@ -166,6 +167,50 @@ describe("onboarding authorization and persistence", () => {
     await expect(service.allocation(owner, record.budgetId, { operationId: id(7), standard: 1_000_000, enhanced: 1_000_000 })).rejects.toMatchObject({ status: 409 });
     store.value!.budgets[0].owners = [other.objectId];
     await expect(service.update(owner, work!.id, { action: "claim", etag: work!.etag })).rejects.toMatchObject({ status: 404 });
+  });
+  it("freezes a selected per-user edit and includes it in operation idempotency", async () => {
+    const record = await completed();
+    const input = { operationId: id(6), standard: 900_000, enhanced: 1_000_000,
+      perUserEdit: { tier: "standard" as const, credits: 12500 } };
+    const saved = await service.allocation(owner, record.budgetId, allocationSchema.parse(input));
+    expect(saved!.perUserEdit).toEqual(input.perUserEdit);
+    expect(onboardingRecordSchema.parse(saved).perUserEdit).toEqual(input.perUserEdit);
+    expect((await service.allocation(owner, record.budgetId, input))!.id).toBe(saved!.id);
+    await expect(service.allocation(owner, record.budgetId, { ...input,
+      perUserEdit: { tier: "standard", credits: null } })).rejects.toMatchObject({ status: 409 });
+    for (const credits of [-1, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(allocationSchema.safeParse({ ...input, perUserEdit: { tier: "standard", credits } }).success).toBe(false);
+    }
+    expect(allocationSchema.safeParse({ ...input, perUserEdit: { tier: "standard", credits: null } }).success).toBe(true);
+    expect(allocationSchema.safeParse({ ...input, perUserEdit: { tier: "other", credits: 10 } }).success).toBe(false);
+  });
+  it("permits member routing only for current owners/admins and requires explicit browser verification", async () => {
+    store.value = structuredClone(legal);
+    const input = { action: "check" as const, userId: id(50), tiers: legal.budgets[0].tiers };
+    await expect(service.member(owner, "legal", input)).rejects.toMatchObject({ status: 404 });
+    await service.member(admin, "legal", input);
+    expect(store.routes.has(input.userId)).toBe(false);
+    expect(memberUpdateSchema.safeParse({ ...input, action: "complete" }).success).toBe(false);
+    const completion = memberUpdateSchema.parse({ ...input, action: "complete", verified: true });
+    await service.member(admin, "legal", completion);
+    await service.member(admin, "legal", completion);
+    expect(store.routes.get(input.userId)).toBe("legal");
+    store.value!.budgets[0].owners = [owner.objectId];
+    await service.member(owner, "legal", input);
+    store.value!.budgets[0].owners = [other.objectId];
+    await expect(service.member(owner, "legal", completion)).rejects.toMatchObject({ status: 404 });
+  });
+  it("never overwrites another BU route and rejects stale policy/group mappings before saving", async () => {
+    store.value = structuredClone(legal);
+    const input = { action: "complete" as const, userId: id(50), tiers: legal.budgets[0].tiers, verified: true as const };
+    store.routes.set(input.userId, "another-bu");
+    await expect(service.member(admin, "legal", { ...input, action: "check" })).rejects.toMatchObject({ status: 409 });
+    await expect(service.member(admin, "legal", input)).rejects.toMatchObject({ status: 409 });
+    expect(store.routes.get(input.userId)).toBe("another-bu");
+    store.routes.delete(input.userId);
+    await expect(service.member(admin, "legal", { ...input, tiers: { ...input.tiers,
+      standard: { ...input.tiers.standard, groupId: id(99) } } })).rejects.toMatchObject({ status: 409 });
+    expect(store.routes.has(input.userId)).toBe(false);
   });
   it("allows additive, repeatable seed imports but refuses routing conflicts and different tenant seeds", async () => {
     const seed = { metadata: legal, requesterIndex: [{ objectId: owner.objectId, budgetId: "legal" }] };

@@ -205,6 +205,34 @@ describe("durable browser fulfilment coordinator", () => {
 describe("approval status and explicit recovery UI", () => {
   const html = (value: RequestRecord, inbox = true) => renderToStaticMarkup(
     <RequestCard record={value} api={apiFixture().api} inbox={inbox} onDecision={() => undefined} />);
+  describe.each([true, false])("status badges for inbox=%s", (inbox) => {
+    const cases: [string, RequestRecord, string, string][] = [
+      ["awaiting approval", { ...record, status: "pending", fulfilment: undefined }, "pending", "Pending owner decision"],
+      ["rejected", { ...record, status: "rejected", fulfilment: undefined }, "rejected", "Rejected"],
+      ["legacy approval", { ...record, fulfilment: undefined }, "pending", "Approved - Enhanced upgrade not yet applied"],
+      ["approved but not applied", record, "pending", "Approved - Enhanced upgrade not yet applied"],
+      ["applying", { ...record, fulfilment: { ...record.fulfilment!, state: "applying" } },
+        "pending", "Approved - Enhanced upgrade attempt in progress"],
+      ["needs attention", { ...record, fulfilment: { ...record.fulfilment!, state: "needs-attention" } },
+        "pending", "Approved - Enhanced upgrade needs attention"],
+      ["applied", { ...record, fulfilment: { ...record.fulfilment!, state: "applied" } },
+        "completed", "Approved - Enhanced move applied"],
+      ["expired without approval", { ...record, status: "pending", fulfilment: undefined,
+        grantKind: "billingPeriod", expiresAt: "2000-01-01T00:00:00Z" }, "pending", "Expired / not approved"],
+      ["expired incomplete upgrade", { ...record, grantKind: "billingPeriod", expiresAt: "2000-01-01T00:00:00Z" },
+        "pending", "Approved - request period expired; review any partial upgrade manually"],
+      ["applied past the requested period", { ...record, grantKind: "billingPeriod", expiresAt: "2000-01-01T00:00:00Z",
+        fulfilment: { ...record.fulfilment!, state: "applied" } }, "completed", "Approved - Enhanced move applied"],
+    ];
+    it.each(cases)("shows the %s badge while collapsed", (_name, value, state, label) => {
+      const markup = html(value, inbox);
+      const badge = `class="badge request-status-badge request-status-${state}">${label}</span>`;
+      expect(markup).toContain(badge);
+      expect(markup.indexOf(badge)).toBeLessThan(markup.indexOf('class="request-card-details"'));
+      expect(markup).toContain('aria-expanded="false"');
+      expect(markup).toContain('hidden=""');
+    });
+  });
   it("shows an explicit apply action for existing approved requests without running anything on render", () => {
     const legacy = { ...record, fulfilment: undefined };
     expect(html(legacy)).toContain("Apply Enhanced upgrade");
@@ -218,13 +246,27 @@ describe("approval status and explicit recovery UI", () => {
       lease: { id: id(90), actor: id(3), until: new Date(Date.now() + 300000).toISOString() } } };
     expect(html(active)).toContain('disabled="">Apply Enhanced upgrade');
   });
-  it("labels manual temporary return without promising automatic expiry or applying expired requests", () => {
+  it("keeps completed temporary upgrades free of return reminders without promising automatic expiry", () => {
     const expired = { ...record, expiresAt: "2026-01-01T00:00:00Z", grantKind: "billingPeriod" as const };
     const applied = { ...expired, fulfilment: { ...record.fulfilment!, state: "applied" as const } };
-    expect(requestStatusLabel(applied, Date.parse(expired.expiresAt))).toContain("manual return overdue");
-    expect(requestStatusLabel(applied, Date.parse(expired.expiresAt) - 1)).toContain("manual return required");
-    expect(html(applied)).toContain("No automatic reversion is scheduled");
+    expect(requestStatusLabel(applied, Date.parse(expired.expiresAt))).toBe("Approved - Enhanced move applied");
+    expect(requestStatusLabel(applied, Date.parse(expired.expiresAt) - 1)).toBe("Approved - Enhanced move applied");
+    expect(html(applied)).toContain("Automatic return to Standard is not implemented");
+    expect(html(applied)).not.toContain("overdue");
     expect(html(expired)).not.toContain("Apply Enhanced upgrade");
     expect(html(applied)).not.toContain("Apply Enhanced upgrade");
+  });
+  it.each([true, false])("starts collapsed for inbox=%s and preserves details behind an accessible disclosure", (inbox) => {
+    const markup = renderToStaticMarkup(<RequestCard record={record} api={apiFixture().api} inbox={inbox}
+      budgetName="Legal" onDecision={() => undefined} />);
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain(`aria-label="Expand request ${record.id.slice(0, 8)} for Legal"`);
+    const control = markup.match(/aria-controls="([^"]+)"/)?.[1];
+    expect(control).toBeTruthy();
+    expect(markup).toContain(`id="${control}" class="request-card-details" hidden=""`);
+    expect(markup).toContain("Permanent increase");
+    expect(markup).toContain(record.justification);
+    expect(markup).toContain(record.id);
+    expect(markup.includes("Apply Enhanced upgrade")).toBe(inbox);
   });
 });

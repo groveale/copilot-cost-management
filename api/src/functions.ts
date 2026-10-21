@@ -5,7 +5,7 @@ import { createAuthenticator } from "./auth.js";
 import { ApiError, decisionSchema, fulfilmentUpdateSchema, seedSchema, submissionSchema, uuid } from "./model.js";
 import { RequestService } from "./service.js";
 import { AzureStore, credential, required, storageErrorCode } from "./storage.js";
-import { allocationSchema, buDecisionSchema, buSubmissionSchema, workUpdateSchema } from "./onboarding.js";
+import { allocationSchema, buDecisionSchema, buSubmissionSchema, memberUpdateSchema, workUpdateSchema } from "./onboarding.js";
 import { OnboardingService } from "./onboarding-service.js";
 import { AzureOnboardingStore } from "./onboarding-storage.js";
 
@@ -63,13 +63,15 @@ export async function handler(request: HttpRequest, context: InvocationContext):
       result = await onboarding.bootstrap(caller, await body(request, seedSchema, 1_048_576));
     } else if (/^onboarding\/[a-f0-9]{64}\/decision$/.test(path) && request.method === "POST") {
       result = await onboarding.decide(caller, path.split("/")[1], await body(request, buDecisionSchema));
-    } else if (/^onboarding\/(?:[a-f0-9]{64}|allocation-bu-[a-f0-9]{24})$/.test(path) && request.method === "GET") {
+    } else if (/^onboarding\/(?:[a-f0-9]{64}|allocation-[a-z0-9-]{1,64})$/.test(path) && request.method === "GET") {
       result = await onboarding.get(caller, path.split("/")[1]);
-    } else if (/^onboarding\/(?:[a-f0-9]{64}|allocation-bu-[a-f0-9]{24})\/work$/.test(path) && request.method === "POST") {
+    } else if (/^onboarding\/(?:[a-f0-9]{64}|allocation-[a-z0-9-]{1,64})\/work$/.test(path) && request.method === "POST") {
       result = await onboarding.update(caller, path.split("/")[1], await body(request, workUpdateSchema));
-    } else if (/^budgets\/bu-[a-f0-9]{24}\/allocation$/.test(path) && ["GET", "POST"].includes(request.method)) {
+    } else if (/^budgets\/[a-z0-9-]{1,64}\/allocation$/.test(path) && ["GET", "POST"].includes(request.method)) {
       result = await onboarding.allocation(caller, path.split("/")[1],
         request.method === "POST" ? await body(request, allocationSchema) : undefined);
+    } else if (/^budgets\/[a-z0-9-]{1,64}\/members$/.test(path) && request.method === "POST") {
+      result = await onboarding.member(caller, path.split("/")[1], await body(request, memberUpdateSchema));
     } else if (path === "context" && request.method === "GET") result = await service.context(caller);
     else if (path === "requests" && request.method === "POST") result = await service.submit(caller, await body(request, submissionSchema));
     else if (path === "requests" && request.method === "GET") result = await service.history(caller, cursor);

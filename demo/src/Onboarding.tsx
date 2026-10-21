@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { Budget, Page, PolicyDefaults } from "../../api/src/contracts";
 import type { BuSubmission, OnboardingRecord } from "../../api/src/onboarding";
@@ -7,6 +7,7 @@ import { RequestApi, type OnboardingCapabilities } from "./api";
 import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import { GraphClient } from "./graph";
 import { runProvisioning, readAllocation } from "./provisioning";
+import type { TierName } from "./config";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const format = (value: number) => value.toLocaleString("en-US");
@@ -14,6 +15,9 @@ const statusLabel = (record: OnboardingRecord) => ({
   pending: "Pending administrator review", provisioning: "Approved - provisioning not yet complete",
   rejected: "Rejected", completed: "Completed - owner workspace available",
 })[record.status];
+const summaryStatus: Record<OnboardingRecord["status"], string> = {
+  pending: "Awaiting approval", provisioning: "Provisioning", rejected: "Rejected", completed: "Completed",
+};
 type Connection = { api: RequestApi; auth: DemoAuth; account: AccountInfo };
 
 export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, capabilities }: Connection & {
@@ -86,17 +90,20 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
       <p>Your proposed ownership comes from your signed-in identity. Approval does not grant you directory roles.</p>
       <p>Proposed owner: {capabilities?.displayName ?? account.name ?? account.username}.
         {" "}Contact: {capabilities?.contactHint ?? account.username ?? "Not supplied by sign-in"}.</p>
-      <form className="request-form" onSubmit={(event) => void submit(event)}>
-        <fieldset disabled={busy}><legend>Business unit details</legend>
-          <label>Business unit name <input name="name" required minLength={2} maxLength={80} /></label>
-          <label>Cost centre <input name="costCenter" required maxLength={80} /></label>
-          <label>Requested monthly planning budget (USD) <input name="budget" type="number" min="0.01" step="0.01" required
+      <form className="request-form bu-request-form" onSubmit={(event) => void submit(event)}>
+        <fieldset className="bu-form-fields" disabled={busy}><legend>Business unit details</legend>
+          <div className="bu-form-grid">
+            <label><span>Business unit name</span><input name="name" required minLength={2} maxLength={80} /></label>
+            <label><span>Cost centre</span><input name="costCenter" required maxLength={80} /></label>
+          </div>
+          <label><span>Requested monthly planning budget (USD)</span><input name="budget" type="number" min="0.01" step="0.01" required
             value={usd} onChange={(event) => setUsd(event.target.value)} /></label>
-          <p role="status">{calculation}</p>
+          <div className="bu-budget-preview"><span className="small muted">Proposed monthly credit allocation</span>
+            <p role="status">{calculation}</p></div>
           <p className="small muted">Demo planning conversion: USD 0.01 per Copilot Credit. Not actual invoiced cost or a credit purchase.
             Policies reset each UTC calendar month. A spare credit goes to Enhanced when the total is odd.</p>
-          <label>Business justification <textarea name="justification" required minLength={20} maxLength={2000} rows={4} /></label>
-          <button>Submit BU request</button>
+          <label><span>Business justification</span><textarea name="justification" required minLength={20} maxLength={2000} rows={5} /></label>
+          <div><button>Submit BU request</button></div>
         </fieldset>
       </form>
     </section>}
@@ -135,11 +142,13 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
   </section>;
 }
 
-function OnboardingCard({ record, admin, defaults, api, auth, account, busy, perform, progress, onPublished }: Connection & {
+export function OnboardingCard({ record, admin, defaults, api, auth, account, busy, perform, progress, onPublished }: Connection & {
   record: OnboardingRecord; admin: boolean; defaults: PolicyDefaults | null; busy: boolean;
   perform: (action: (signal: AbortSignal) => Promise<void>) => Promise<void>;
   progress: (record: OnboardingRecord) => void; onPublished: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
   const [needsConsent, setNeedsConsent] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [note, setNote] = useState("");
@@ -153,7 +162,19 @@ function OnboardingCard({ record, admin, defaults, api, auth, account, busy, per
       throw error;
     }
   }
-  return <article className="card"><h3>{record.name}: {statusLabel(record)}</h3>
+  return <article className="card request-card bu-request-card">
+    <div className="request-card-heading">
+      <div><h3>{record.name}</h3><p className="small muted">{record.costCenter} / ${record.monthlyBudgetUsd} per month
+        {" / "}<time dateTime={record.createdAt}>{new Date(record.createdAt).toLocaleDateString()}</time></p></div>
+      <div className="request-card-controls">
+        <span className={`badge request-status-badge request-status-${record.status}`}>{summaryStatus[record.status]}</span>
+        <button type="button" className="secondary" aria-expanded={expanded} aria-controls={detailsId}
+          aria-label={`${expanded ? "Collapse" : "Expand"} BU request ${record.name}`}
+          onClick={() => setExpanded((value) => !value)}>{expanded ? "Collapse" : "Expand"}</button>
+      </div>
+    </div>
+    <div id={detailsId} className="request-card-details" hidden={!expanded}>
+    <p className="small muted">{statusLabel(record)}</p>
     <dl><dt>Cost centre</dt><dd>{record.costCenter}</dd><dt>Requested monthly USD</dt><dd>${record.monthlyBudgetUsd}</dd>
       <dt>Proposed owner</dt><dd>{record.displayName ?? record.requesterId} {record.contactHint && `(${record.contactHint})`}</dd>
       <dt>Standard / Enhanced credits</dt><dd>{format(record.standard.credits)} / {format(record.enhanced.credits)}</dd>
@@ -161,7 +182,6 @@ function OnboardingCard({ record, admin, defaults, api, auth, account, busy, per
     </dl><p className="justification">{record.justification}</p>
     {record.reviewNote && <p>Finance review: {record.reviewNote}</p>}
     {record.rejectionReason && <p>Rejection reason: {record.rejectionReason}</p>}
-    {record.lastError && <p className="error" role="alert">{record.lastError}</p>}
     {record.status === "provisioning" && <p>Created resources: {Object.keys(record.resources).length}/4.
       Incomplete operations retain their progress. No new ownership is published until verification completes.</p>}
     {admin && record.status === "pending" && <div className="request-form">
@@ -198,28 +218,34 @@ function OnboardingCard({ record, admin, defaults, api, auth, account, busy, per
       await auth.consentGraph(account);
       await graphToken();
     })}>Grant Graph access</button>}
+    </div>
+    {record.lastError && <p className="error" role="alert">{record.lastError}</p>}
   </article>;
 }
 
-export function BudgetAllocation({ budget, api, auth, account, onApplied }: Connection & { budget: Budget; onApplied: () => void }) {
-  const [standard, setStandard] = useState("");
-  const [enhanced, setEnhanced] = useState("");
+export function BudgetAllocation({ budget, tier, api, auth, account, onApplied, disabled = false, onBusyChange }: Connection & {
+  budget: Budget; tier: TierName; onApplied: () => void; disabled?: boolean; onBusyChange: (busy: boolean) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const detailsId = useId();
+  const [monthly, setMonthly] = useState("");
+  const [perUser, setPerUser] = useState("");
+  const [unlimited, setUnlimited] = useState(false);
+  const [loaded, setLoaded] = useState<Awaited<ReturnType<typeof readAllocation>> | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [needsConsent, setNeedsConsent] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const operation = useRef<{ signature: string; id: string } | null>(null);
-  useEffect(() => {
-    if (!budget.approvedCreditCeiling) return;
-    void perform(loadLimits);
-    return () => controller.current?.abort();
-  }, [budget, auth, account]);
-  if (!budget.approvedCreditCeiling) return null;
+  useEffect(() => () => controller.current?.abort(), []);
+  const other = tier === "standard" ? "enhanced" : "standard";
+  const ceiling = budget.approvedCreditCeiling;
+  const label = tier === "standard" ? "Standard" : "Enhanced";
   async function perform(action: (graph: GraphClient, signal: AbortSignal) => Promise<void>, interactive = false) {
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
-    setBusy(true); setError(""); setNotice("");
+    setBusy(true); onBusyChange(true); setError(""); setNotice("");
     try {
       if (interactive) await auth.consentGraph(account);
       await auth.token(account);
@@ -228,48 +254,80 @@ export function BudgetAllocation({ budget, api, auth, account, onApplied }: Conn
     } catch (error) {
       if (!current.signal.aborted) { setNeedsConsent(isGraphInteractionRequired(error)); setError(message(error)); }
     }
-    finally { if (!current.signal.aborted) setBusy(false); }
+    finally { if (!current.signal.aborted) setBusy(false); onBusyChange(false); }
   }
   async function loadLimits(graph: GraphClient, signal: AbortSignal) {
     const values = await readAllocation(graph, budget, signal);
-    if (!signal.aborted) { setStandard(String(values.standard)); setEnhanced(String(values.enhanced)); }
+    if (!signal.aborted) {
+      setLoaded(values); setMonthly(String(values[tier]));
+      setUnlimited(values.perUser[tier] === null); setPerUser(values.perUser[tier] === null ? "" : String(values.perUser[tier]));
+    }
   }
   async function run(graph: GraphClient, record: OnboardingRecord, signal: AbortSignal) {
     const saved = await runProvisioning(api, graph, record, signal, () => undefined);
     if (!signal.aborted && saved.status === "completed") {
-      setStandard(String(saved.standard.credits)); setEnhanced(String(saved.enhanced.credits));
-      setNotice("Allocation verified in Graph. Live details are refreshing.");
+      setNotice("Policy limits verified in Graph. Live details are refreshing.");
       operation.current = null; onApplied();
     }
   }
-  return <section className="card"><h2>Allocate the approved monthly budget</h2>
-    <p>Ceiling: {format(budget.approvedCreditCeiling)} Copilot Credits (${(budget.approvedCreditCeiling / 100).toLocaleString("en-US")} planning equivalent).
-      This application cannot prevent separately authorized changes in the admin center.</p>
-    <div className="request-form"><fieldset disabled={busy}><legend>Tier credit limits</legend>
-      <label>Standard credits <input type="number" min="0" step="1" value={standard} onChange={(event) => setStandard(event.target.value)} /></label>
-      <label>Enhanced credits <input type="number" min="0" step="1" value={enhanced} onChange={(event) => setEnhanced(event.target.value)} /></label>
+  return <div className="policy-editor">
+    <button type="button" className="secondary" disabled={disabled || busy || !ceiling} aria-expanded={editing} aria-controls={detailsId}
+      aria-label={`Edit ${label} policy limits`} onClick={() => {
+        setEditing((value) => !value);
+        if (!editing) void perform(loadLimits);
+      }}>{editing ? "Close editor" : "Edit"}</button>
+    {!ceiling && <p className="small muted">An approved BU credit ceiling is required before editing policy limits.</p>}
+    <div id={detailsId} hidden={!editing}>
+    <p className="small muted">BU monthly ceiling: {ceiling === undefined ? "Unavailable" : format(ceiling)} Copilot Credits.
+      The other policy's limits are left unchanged. This does not prevent separately authorized admin-center changes.</p>
+    <form className="policy-limit-form" onSubmit={(event) => {
+      event.preventDefault();
+      void perform(async (graph, signal) => {
+        if (!ceiling || !loaded || monthly.trim() === "" || (!unlimited && perUser.trim() === "")) {
+          throw new Error("Load the current limits and enter both values before saving.");
+        }
+        const credits = Number(monthly);
+        const userCredits = unlimited ? null : Number(perUser);
+        if (userCredits !== null && (!Number.isFinite(userCredits) || userCredits < 0 || userCredits > Number.MAX_SAFE_INTEGER)) {
+          throw new Error("The per-user limit must be a non-negative number of credits, or explicitly Unlimited.");
+        }
+        const latest = await readAllocation(graph, budget, signal);
+        if (latest[tier] !== loaded[tier] || latest.perUser[tier] !== loaded.perUser[tier]) {
+          throw new Error("This policy changed since the editor opened. Refresh the limits, or resume a saved edit before making further changes.");
+        }
+        const standard = tier === "standard" ? credits : latest.standard;
+        const enhanced = tier === "enhanced" ? credits : latest.enhanced;
+        checkAllocation(standard, enhanced, ceiling);
+        const perUserEdit = { tier, credits: userCredits };
+        const signature = JSON.stringify({ standard, enhanced, perUserEdit });
+        if (operation.current?.signature !== signature) operation.current = { signature, id: crypto.randomUUID() };
+        const saved = await api.allocation(budget.id, signal, { operationId: operation.current.id, standard, enhanced, perUserEdit });
+        if (!saved) throw new Error("No saved policy edit was returned.");
+        await run(graph, saved, signal);
+      });
+    }}><fieldset disabled={disabled || busy || !loaded}><legend>{label} policy limits</legend>
+      <label>Monthly allocation (credits)<input type="number" min="0" step="1"
+        max={ceiling && loaded ? Math.max(0, ceiling - loaded[other]) : undefined}
+        required value={monthly} onChange={(event) => setMonthly(event.target.value)} /></label>
+      <label>Per-user credit limit<input type="number" min="0" step="any" max={Number.MAX_SAFE_INTEGER}
+        required={!unlimited} disabled={unlimited} value={perUser} onChange={(event) => setPerUser(event.target.value)} /></label>
+      <label className="checkbox-choice"><input type="checkbox" checked={unlimited}
+        onChange={(event) => setUnlimited(event.target.checked)} />Unlimited per-user credits</label>
+      <button type="submit">Save policy limits</button>
+    </fieldset></form>
       <div className="actions">
-        <button className="secondary" onClick={() => void perform(loadLimits)}>Refresh actual Graph limits</button>
-        <button disabled={!standard || !enhanced} onClick={() => void perform(async (graph, signal) => {
-          checkAllocation(Number(standard), Number(enhanced), budget.approvedCreditCeiling!);
-          const signature = `${standard}:${enhanced}`;
-          if (operation.current?.signature !== signature) operation.current = { signature, id: crypto.randomUUID() };
-          const saved = await api.allocation(budget.id, signal, { operationId: operation.current.id, standard: Number(standard), enhanced: Number(enhanced) });
-          if (!saved) throw new Error("No allocation operation was returned.");
-          await run(graph, saved, signal);
-        })}>Apply allocation</button>
-        <button className="secondary" onClick={() => void perform(async (graph, signal) => {
+        <button type="button" className="secondary" disabled={disabled || busy} onClick={() => void perform(loadLimits)}>Refresh limits</button>
+        <button type="button" className="secondary" disabled={disabled || busy} onClick={() => void perform(async (graph, signal) => {
           const saved = await api.allocation(budget.id, signal);
           if (!saved || saved.status === "completed") throw new Error("There is no unfinished allocation to resume.");
+          if (saved.perUserEdit && saved.perUserEdit.tier !== tier) throw new Error("The unfinished edit belongs to the other policy. Open that policy's editor to resume it.");
           await run(graph, saved, signal);
-        })}>Resume saved allocation</button>
+        })}>Resume saved policy edit</button>
       </div>
-    </fieldset></div>
-    {needsConsent && <button disabled={busy} onClick={() => void perform(async (graph, signal) => {
-      if (!standard && !enhanced) await loadLimits(graph, signal);
-    }, true)}>Grant Graph access</button>}
+    </div>
+    {needsConsent && <button disabled={disabled || busy} onClick={() => void perform(loadLimits, true)}>Grant Graph access</button>}
     {busy && <p role="status">Working with Graph. Keep this page open.</p>}
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
-  </section>;
+  </div>;
 }

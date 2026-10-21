@@ -6,7 +6,7 @@ import { requestId } from "./service.js";
 import { checkAllocation, splitCredits, usdToCredits } from "./budget-math.js";
 
 import { resourceKeys, type BuSubmission, type BuDecision, type WorkUpdate, type OnboardingRecord,
-  type OnboardingStore, type allocationSchema } from "./onboarding.js";
+  type OnboardingStore, type allocationSchema, type MemberUpdate } from "./onboarding.js";
 function conflict(message: string): never { throw new ApiError(409, "onboarding-conflict", message); }
 function sameDefaults(left: PolicyDefaults, right: PolicyDefaults): boolean {
   return (["standard", "enhanced"] as const).every((tier) =>
@@ -96,13 +96,26 @@ export class OnboardingService {
     }
     return this.saved(updated, input.etag);
   }
-  private async budget(caller: Caller, id: string): Promise<Budget> {
+  private async budget(caller: Caller, id: string, requireCeiling = true): Promise<Budget> {
     const budget = (await this.store.metadata()).metadata?.budgets.find((item) => item.id === id);
     if (!budget || (!budget.owners.includes(caller.objectId) && !this.isAdmin(caller))) {
       throw new ApiError(404, "not-found", "Budget not found in your current workspace.");
     }
-    if (!budget.approvedCreditCeiling) throw new ApiError(409, "no-approved-ceiling", "This budget has no onboarding-approved credit ceiling.");
+    if (requireCeiling && !budget.approvedCreditCeiling) throw new ApiError(409, "no-approved-ceiling", "This budget has no onboarding-approved credit ceiling.");
     return budget;
+  }
+  async member(caller: Caller, budgetId: string, input: MemberUpdate) {
+    const budget = await this.budget(caller, budgetId, false);
+    if (!(["standard", "enhanced"] as const).every((tier) =>
+      input.tiers[tier].policyId === budget.tiers[tier].policyId && input.tiers[tier].groupId === budget.tiers[tier].groupId)) {
+      conflict("The BU policy/group mappings changed. Refresh before adding a member.");
+    }
+    const existing = await this.store.routing(input.userId);
+    if (existing && existing !== budget.id) {
+      throw new ApiError(409, "routing-conflict", "This person is already routed to another BU. No existing routing was changed; ask an administrator to reconcile it.");
+    }
+    if (input.action === "complete") await this.store.seedRouting(input.userId, budget.id);
+    return { budget };
   }
   async allocation(caller: Caller, budgetId: string, input?: z.infer<typeof allocationSchema>) {
     const budget = await this.budget(caller, budgetId);
@@ -112,7 +125,9 @@ export class OnboardingService {
     try { checkAllocation(input.standard, input.enhanced, budget.approvedCreditCeiling!); }
     catch (error) { throw new ApiError(400, "invalid-allocation", error instanceof Error ? error.message : "Invalid allocation."); }
     if (existing?.operationId === input.operationId) {
-      if (existing.standard.credits !== input.standard || existing.enhanced.credits !== input.enhanced) conflict("Allocation operation ID has different content.");
+      if (existing.standard.credits !== input.standard || existing.enhanced.credits !== input.enhanced ||
+          existing.perUserEdit?.tier !== input.perUserEdit?.tier ||
+          existing.perUserEdit?.credits !== input.perUserEdit?.credits) conflict("Allocation operation ID has different content.");
       return existing;
     }
     if (existing && existing.status !== "completed") conflict("Resume the previous allocation before starting another.");
@@ -123,6 +138,7 @@ export class OnboardingService {
       budgetId, createdAt: this.clock().toISOString(), status: "provisioning", approvedCredits: budget.approvedCreditCeiling!,
       standard: { credits: input.standard, perUserCredits: 0, billingMethods: "notSpecified" },
       enhanced: { credits: input.enhanced, perUserCredits: 0, billingMethods: "notSpecified" },
+      ...(input.perUserEdit ? { perUserEdit: input.perUserEdit } : {}),
       resources: { standardGroup: budget.tiers.standard.groupId, enhancedGroup: budget.tiers.enhanced.groupId,
         standardPolicy: budget.tiers.standard.policyId, enhancedPolicy: budget.tiers.enhanced.policyId },
       intents: [], etag: "",

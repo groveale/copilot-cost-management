@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import type { BudgetConfig, DemoConfig, GrantKind } from "./config";
@@ -10,6 +10,7 @@ import { BusinessUnitOnboarding, BudgetAllocation } from "./Onboarding";
 import { AdminPolicies } from "./AdminPolicies";
 import { PersonalBalance } from "./PersonalBalance";
 import { ThemeToggle } from "./ThemeToggle";
+import { AddPolicyMember } from "./PolicyMembers";
 import { requestStatusLabel as statusLabel, runFulfilment } from "./fulfilment";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -183,7 +184,7 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
 
 function CreditApprovalNotice() {
   return <p className="notice">Approval moves the requester from Standard to Enhanced using the owner's delegated Graph access.
-    Failed or partial upgrades require explicit retry. Temporary increases require manual return to Standard at the UTC calendar month boundary.
+    Failed or partial upgrades require explicit retry.
     Owners may approve their own requests in this MVP.</p>;
 }
 
@@ -278,7 +279,7 @@ function SubmissionForm({ api, context }: { api: RequestApi; context: Context })
           <label className="radio-choice"><input type="radio" name="duration" checked={grantKind === "billingPeriod"} onChange={() => setGrantKind("billingPeriod")} />Rest of this billing period (demo: UTC calendar month)</label>
           <label className="radio-choice"><input type="radio" name="duration" checked={grantKind === "permanent"} onChange={() => setGrantKind("permanent")} />Permanent increase</label>
         </fieldset>
-        {grantKind === "billingPeriod" && <p className="small muted">An owner or administrator must manually return you to Standard at period-end. This demo does not schedule automatic reversion.</p>}
+        {grantKind === "billingPeriod" && <p className="small muted">Automatic return to Standard is not implemented in this MVP.</p>}
         <button disabled={busy || context.route.state !== "ready"}>{busy ? "Saving request..." : "Submit request"}</button>
       </form>
       {error && <p className="error" role="alert">{error}</p>}
@@ -325,6 +326,8 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
   auth?: DemoAuth; account?: AccountInfo; serviceId?: string;
   budgetName?: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -358,7 +361,19 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
   }
   const expired = !!record.expiresAt && Date.parse(record.expiresAt) <= Date.now();
   const activeLease = !!record.fulfilment?.lease && Date.parse(record.fulfilment.lease.until) > Date.now();
-  return <article className="card"><h3>{statusLabel(record)}</h3>
+  const summaryStatus = record.status === "rejected" ? "rejected" :
+    record.status === "approved" && record.fulfilment?.state === "applied" ? "completed" : "pending";
+  return <article className="card request-card">
+    <div className="request-card-heading">
+      <div><h3><span className={`badge request-status-badge request-status-${summaryStatus}`}>{statusLabel(record)}</span></h3>
+        <p className="small muted">{budgetName ?? record.budgetId} / <time dateTime={record.createdAt}>{new Date(record.createdAt).toLocaleDateString()}</time>
+          {" / "}{record.grantKind === "billingPeriod" ? "Temporary increase" : "Permanent increase"}</p>
+      </div>
+      <button type="button" className="secondary" aria-expanded={expanded} aria-controls={detailsId}
+        aria-label={`${expanded ? "Collapse" : "Expand"} request ${record.id.slice(0, 8)} for ${budgetName ?? record.budgetId}`}
+        onClick={() => setExpanded((value) => !value)}>{expanded ? "Collapse" : "Expand"}</button>
+    </div>
+    <div id={detailsId} className="request-card-details" hidden={!expanded}>
     <dl><dt>Request</dt><dd className="mono">{record.id}</dd><dt>Business unit</dt><dd>{budgetName ?? record.budgetId}</dd>
       {inbox && <><dt>Requester object ID</dt><dd className="mono">{record.requesterId}</dd></>}
       <dt>Submitted</dt><dd>{new Date(record.createdAt).toLocaleString()}</dd><dt>Duration</dt>
@@ -367,8 +382,7 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
     {record.rejectionReason && <p>Rejection reason: {record.rejectionReason}</p>}
     {record.decisionAt && <p className="small muted">Decision recorded {record.decisionAt}</p>}
     {record.fulfilment?.appliedAt && <p className="small muted">Group move verified by the delegated browser {record.fulfilment.appliedAt}. Policy/balance updates may take time to propagate.</p>}
-    {record.status === "approved" && record.expiresAt && <p className="notice">Manual return to Standard {expired ? "is overdue" : "is required"} at {record.expiresAt}.
-      No automatic reversion is scheduled. Review actual membership before making the return.</p>}
+    {record.expiresAt && <p className="small muted">Automatic return to Standard is not implemented in this MVP.</p>}
     {record.fulfilment?.lease && <p className="small muted">Upgrade attempt lease until {record.fulfilment.lease.until}. If the browser was closed, wait for the lease to expire, refresh and retry.</p>}
     {inbox && record.status === "pending" && !expired && <div className="request-form">
       <label htmlFor={`reason-${record.id}`}>Reason if rejecting (10-1000 characters)</label>
@@ -380,6 +394,8 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
       <button disabled={busy || activeLease} onClick={() => void decide("approved")}>
         {record.fulfilment?.state === "needs-attention" ? "Retry Enhanced upgrade" : "Apply Enhanced upgrade"}
       </button>}
+    </div>
+    {busy && <p className="small muted" role="status">Updating this request...</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </article>;
 }
@@ -392,6 +408,8 @@ function OwnerGraph({ budget, serviceId, auth, account, api }: {
   const [busy, setBusy] = useState(false);
   const [needsConsent, setNeedsConsent] = useState(false);
   const [graphReady, setGraphReady] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [notice, setNotice] = useState("");
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
     void load();
@@ -424,10 +442,22 @@ function OwnerGraph({ budget, serviceId, auth, account, api }: {
     <p className="muted">{budget.businessArea} / Cost centre: {budget.costCenter}</p>
     <p className="small muted">Standard and Enhanced policy settings, members and current consumption. Readings come directly from Graph and may lag behind membership changes.</p>
     <div className="actions">
-      <button disabled={busy} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh policies"}</button>
-      {needsConsent && <button disabled={busy} onClick={() => void load(true)}>Grant Graph access</button>}
+      <button disabled={busy || working} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh policies"}</button>
+      {needsConsent && <button disabled={busy || working} onClick={() => void load(true)}>Grant Graph access</button>}
     </div>
+    {working && <p className="small muted" role="status">A policy action is in progress. Keep this page open.</p>}
+    {notice && <p className="notice small" role="status">{notice}</p>}
     {error && <p className="error" role="alert">{error}</p>}
-  </section>{graphReady && budget.approvedCreditCeiling && <BudgetAllocation key={budget.id} budget={budget} api={api} auth={auth} account={account} onApplied={() => void load()} />}
-    {snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId} />}</>;
+  </section>
+    {snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId}
+      policyActions={(tier) => graphReady && <BudgetAllocation budget={budget} tier={tier} api={api} auth={auth} account={account}
+        disabled={busy || working} onBusyChange={setWorking} onApplied={() => {
+          setNotice(`${tier === "standard" ? "Standard" : "Enhanced"} policy limits were verified in Graph.`);
+          void load();
+        }} />}
+      memberActions={(tier) => graphReady && <AddPolicyMember budget={budget} tier={tier} serviceId={serviceId}
+        api={api} auth={auth} account={account} disabled={busy || working} onBusyChange={setWorking} onAdded={(user) => {
+          setNotice(`${user.displayName}'s ${tier === "standard" ? "Standard" : "Enhanced"} membership and request routing are verified. Policy/balance readings may take time to update.`);
+          void load();
+        }} />} />}</>;
 }

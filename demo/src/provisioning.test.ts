@@ -85,7 +85,7 @@ beforeEach(() => {
     }
     if (method === "PATCH") {
       if (stalePatch || new Headers(init?.headers).get("if-match") !== String(policy.etag)) return response({ error: { code: "preconditionFailed", message: "Policy changed." } }, 412);
-      patches.push(match[1]); policy.periodLimit = body.periodLimit; policy.etag = Number(policy.etag) + 1;
+      patches.push(match[1]); Object.assign(policy, body); policy.etag = Number(policy.etag) + 1;
       mutationTotals.push([...policies.values()].reduce((total, item) => total + Number(object(item.periodLimit, "limit").value), 0));
       return response(policy, 200, String(policy.etag));
     }
@@ -147,6 +147,42 @@ it("surfaces stale Graph ETags without retrying or reporting completion", async 
   stalePatch = true;
   await expect(run()).rejects.toThrow("preconditionFailed");
   expect(work.status).toBe("provisioning"); expect(patches).toEqual([]);
+});
+it("saves monthly and per-user limits on only the selected policy and leaves billing/other policy unchanged", async () => {
+  await run();
+  const other = structuredClone(policies.get(work.resources.enhancedPolicy!)!);
+  work = { ...work, kind: "allocation", status: "provisioning",
+    standard: { ...work.standard, credits: 900_000 }, perUserEdit: { tier: "standard", credits: 12000 } };
+  await run();
+  expect(patches).toEqual([work.resources.standardPolicy]);
+  expect(policies.get(work.resources.standardPolicy!)!.perUserLimit).toMatchObject({ value: 12000, unit: "copilotCredit" });
+  expect(policies.get(work.resources.standardPolicy!)!.billingMethods).toBe("prepaidCredits");
+  expect(policies.get(work.resources.enhancedPolicy!)).toEqual(other);
+  expect(work.status).toBe("completed");
+});
+it("preserves an explicit unlimited per-user edit and reconciles an already-applied saved edit without another patch", async () => {
+  await run();
+  work = { ...work, kind: "allocation", status: "provisioning", perUserEdit: { tier: "enhanced", credits: null } };
+  await run();
+  expect(policies.get(work.resources.enhancedPolicy!)!.perUserLimit).toEqual({
+    "@odata.type": "#microsoft.graph.unlimitedCostManagementQuantity", unit: "copilotCredit",
+  });
+  expect(patches).toEqual([work.resources.enhancedPolicy]);
+  work.status = "provisioning";
+  await run();
+  expect(patches).toEqual([work.resources.enhancedPolicy]);
+  expect(work.status).toBe("completed");
+});
+it("does not restore a different policy's externally changed allocation", async () => {
+  await run();
+  work = { ...work, kind: "allocation", status: "provisioning",
+    standard: { ...work.standard, credits: 900_000 }, perUserEdit: { tier: "standard", credits: 12000 } };
+  policies.get(work.resources.enhancedPolicy!)!.periodLimit = {
+    "@odata.type": "#microsoft.graph.limitedCostManagementQuantity", value: 800_000, unit: "copilotCredit",
+  };
+  await expect(run()).rejects.toThrow("other policy allocation changed");
+  expect(patches).toEqual([]);
+  expect(work.status).toBe("provisioning");
 });
 it("rejects wrong units, preserves explicit unlimited per-user limits and creates valid policy names", () => {
   expect(() => templateSettings({ billingMethods: "prepaidCredits", perUserLimit: { unit: "USD" } })).toThrow();

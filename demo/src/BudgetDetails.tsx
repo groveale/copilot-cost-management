@@ -1,9 +1,15 @@
+import type { ReactNode } from "react";
 import type { BudgetConfig, TierName } from "./config";
 import {
   formatConsumed, formatField, formatQuantity, formatTime, memberPolicyNote,
   sourceTimestamp, tierGroupIds, tierNames,
   type BudgetSnapshot, type Fields, type Member, type Resource,
 } from "./details";
+
+type PolicyControls = {
+  policyActions?: (name: TierName) => ReactNode;
+  memberActions?: (name: TierName) => ReactNode;
+};
 
 function ResourceStatus({ resource }: { resource: Resource<unknown> | undefined }) {
   if (!resource || resource.state === "loading") return <p className="small muted" role="status">Loading from Graph...</p>;
@@ -62,6 +68,10 @@ function MemberRow({ member, groups, budget, snapshot, serviceId }: {
     <div className="member-identity">
       <h4>{typeof member.fields.displayName === "string" && member.fields.displayName ? member.fields.displayName : member.id}</h4>
       <p className="small muted">{formatField(member.fields.userPrincipalName ?? member.fields.mail)}</p>
+      {member.kind === "user" && <p className="small">{row ? `Consumed: ${formatConsumed(row)}` :
+        balance?.state === "ready" ? "Consumption unavailable" : balance?.state === "error" ? "Consumption could not be loaded" : "Loading consumption..."}</p>}
+    </div>
+    <details className="member-more"><summary>Consumption and member details</summary>
       <span className="badge">{member.kind}</span>
       <p className="small muted member-groups">Direct member of: {groups.map((id) => {
         const directory = snapshot.groups[id].directory;
@@ -69,7 +79,6 @@ function MemberRow({ member, groups, budget, snapshot, serviceId }: {
           directory.data.fields.displayName : id;
       }).join(", ")}</p>
       <details><summary className="small">Directory member details</summary><pre>{JSON.stringify(member.fields, null, 2)}</pre></details>
-    </div>
     <div className="member-reading">
       {member.kind !== "user" ? <p className="muted">Consumption is queried for direct users only. Nested groups are not expanded.</p> : <>
         <span className="eyebrow">{serviceId} / CURRENT READING</span>
@@ -80,12 +89,13 @@ function MemberRow({ member, groups, budget, snapshot, serviceId }: {
           <p className="reading-note">No {serviceId} balance was returned. Consumption is unavailable, not zero.</p>)}
       </>}
     </div>
+    </details>
   </article>;
 }
 
-function TierPanel({ name, budget, snapshot, serviceId }: {
+function TierPanel({ name, budget, snapshot, serviceId, policyActions, memberActions }: {
   name: TierName; budget: BudgetConfig; snapshot: BudgetSnapshot; serviceId: string;
-}) {
+} & PolicyControls) {
   const tier = budget.tiers[name];
   const details = snapshot.tiers[name];
   const policy = details.policy.state === "ready" ? details.policy.data.fields : null;
@@ -106,13 +116,17 @@ function TierPanel({ name, budget, snapshot, serviceId }: {
         <h2 id={`${name}-heading`}>{policy && typeof policy.displayName === "string" ? policy.displayName : `${name === "standard" ? "Standard" : "Enhanced"} policy`}</h2></div>
       {policy && <span className="badge">{formatField(policy.status)}</span>}
     </div>
-    <p className="mono muted">{tier.policyId}</p>
     <ResourceStatus resource={details.policy} />
     {policy && <>
       <div className="allowances">
-        <div><span className="small muted">Policy period limit</span><strong>{formatQuantity(policy.periodLimit)}</strong></div>
+        <div><span className="small muted">Monthly allocation</span><strong>{formatQuantity(policy.periodLimit)}</strong></div>
         <div><span className="small muted">Per-user limit</span><strong>{formatQuantity(policy.perUserLimit)}</strong></div>
       </div>
+    </>}
+    {policyActions?.(name)}
+    <details className="policy-more"><summary>Policy settings and groups</summary>
+    <p className="mono muted">{tier.policyId}</p>
+    {policy && <>
       <dl className="policy-fields">
         <dt>Billing methods</dt><dd>{formatField(policy.billingMethods)}</dd>
         <dt>Policy type</dt><dd>{formatField(policy["@odata.type"]).replace("#microsoft.graph.", "")}</dd>
@@ -150,17 +164,21 @@ function TierPanel({ name, budget, snapshot, serviceId }: {
         {group.members.state === "ready" && <p className="small">{group.members.data.length} direct members loaded from Graph.</p>}
       </div>;
     })}</div>
+    </details>
     <h3>Members and consumption</h3>
+    {memberActions?.(name)}
+    <details className="policy-members"><summary>View members and consumption ({members.size}{complete ? "" : " loaded so far"})</summary>
     <p className="small muted">{members.size} distinct direct members loaded{complete ? "" : " so far; membership coverage is incomplete"}. Current {serviceId} user readings are not historical policy totals.</p>
     {complete && members.size === 0 && <p className="muted">No direct members returned for the displayed groups.</p>}
     {[...members.values()].map(({ member, groups }) =>
       <MemberRow key={member.id} member={member} groups={groups} budget={budget} snapshot={snapshot} serviceId={serviceId} />)}
+    </details>
   </section>;
 }
 
-export function BudgetDetails({ budget, snapshot, serviceId }: {
+export function BudgetDetails({ budget, snapshot, serviceId, policyActions, memberActions }: {
   budget: BudgetConfig; snapshot: BudgetSnapshot; serviceId: string;
-}) {
+} & PolicyControls) {
   const balances = Object.values(snapshot.balances);
   const discovered = new Set(Object.values(snapshot.groups).flatMap((group) =>
     group.members.state === "ready" ? group.members.data.filter((member) => member.kind === "user").map((member) => member.id) : []));
@@ -172,6 +190,7 @@ export function BudgetDetails({ budget, snapshot, serviceId }: {
       {" "}Refresh started {formatTime(snapshot.requestedAt)}. Source timestamps are shown per reading.
     </p>
     <div className="tier-grid">{tierNames.map((name) =>
-      <TierPanel key={name} name={name} budget={budget} snapshot={snapshot} serviceId={serviceId} />)}</div>
+      <TierPanel key={name} name={name} budget={budget} snapshot={snapshot} serviceId={serviceId}
+        policyActions={policyActions} memberActions={memberActions} />)}</div>
   </>;
 }

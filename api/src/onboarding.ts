@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Metadata, Page } from "./contracts.js";
-import { policySettingsSchema as settingsSchema, uuid } from "./model.js";
+import { metadataSchema, policySettingsSchema as settingsSchema, uuid } from "./model.js";
 import { usdToCredits } from "./budget-math.js";
 
 export const resourceKeys = ["standardGroup", "enhancedGroup", "standardPolicy", "enhancedPolicy"] as const;
@@ -27,7 +27,18 @@ export const workUpdateSchema = z.object({
   verified: z.literal(true).optional(),
   failure: z.string().trim().min(1).max(500).optional(),
 }).strict();
-export const allocationSchema = z.object({ operationId: uuid, standard: credit, enhanced: credit }).strict();
+const perUserEditSchema = z.object({
+  tier: z.enum(["standard", "enhanced"]), credits: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+}).strict();
+export const allocationSchema = z.object({
+  operationId: uuid, standard: credit, enhanced: credit, perUserEdit: perUserEditSchema.optional(),
+}).strict();
+export const memberUpdateSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("check"), userId: uuid, tiers: metadataSchema.shape.budgets.element.shape.tiers }).strict(),
+  z.object({ action: z.literal("complete"), userId: uuid, tiers: metadataSchema.shape.budgets.element.shape.tiers, verified: z.literal(true) }).strict(),
+]);
+export type AllocationInput = z.infer<typeof allocationSchema>;
+export type MemberUpdate = z.infer<typeof memberUpdateSchema>;
 export const onboardingRecordSchema = z.object({
   version: z.literal(1), kind: z.enum(["onboarding", "allocation"]), id: z.string(),
   tenantId: uuid, requesterId: uuid, operationId: uuid, name: z.string(), costCenter: z.string(),
@@ -36,6 +47,7 @@ export const onboardingRecordSchema = z.object({
   budgetId: z.string(), status: z.enum(["pending", "provisioning", "rejected", "completed"]),
   approvedCredits: credit, standard: settingsSchema.extend({ credits: credit }),
   enhanced: settingsSchema.extend({ credits: credit }),
+  perUserEdit: perUserEditSchema.optional(),
   resources: z.object({ standardGroup: uuid.optional(), enhancedGroup: uuid.optional(),
     standardPolicy: uuid.optional(), enhancedPolicy: uuid.optional() }).strict(),
   intents: z.array(z.enum(resourceKeys)), decisionBy: uuid.optional(), decisionAt: z.iso.datetime().optional(),
@@ -56,5 +68,6 @@ export interface OnboardingStore {
   list(requesterId?: string, cursor?: string): Promise<Page<OnboardingRecord>>;
   metadata(): Promise<MetadataSnapshot>;
   saveMetadata(metadata: Metadata, etag: string | null): Promise<void>;
+  routing(objectId: string): Promise<string | null>;
   seedRouting(objectId: string, budgetId: string): Promise<void>;
 }

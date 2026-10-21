@@ -112,6 +112,23 @@ const markup = (snapshot: BudgetSnapshot) => renderToStaticMarkup(
   createElement(BudgetDetails, { budget, snapshot, serviceId: "cowork" }));
 
 describe("live Graph detail loading", () => {
+  it("starts technical settings, member lists and individual consumption details collapsed", async () => {
+    const { snapshot } = await load();
+    const html = renderToStaticMarkup(createElement(BudgetDetails, {
+      budget, snapshot, serviceId: "cowork",
+      policyActions: (tier) => createElement("button", null, `Edit ${tier}`),
+      memberActions: (tier) => createElement("button", null, `Add member to ${tier}`),
+    }));
+    expect(html).toContain('class="policy-more"><summary>Policy settings and groups</summary>');
+    expect(html).toContain('class="policy-members"><summary>View members and consumption (1)</summary>');
+    expect(html).toContain('class="member-more"><summary>Consumption and member details</summary>');
+    expect(html).not.toMatch(/<details[^>]*\sopen(?:=|>)/);
+    expect(html).toContain("Monthly allocation");
+    expect(html).toContain("Per-user limit");
+    expect(html).toContain("Consumed: 2,000 Copilot credits");
+    expect(html.indexOf("Edit standard")).toBeLessThan(html.indexOf('class="policy-more"'));
+    expect(html.indexOf("Add member to standard")).toBeLessThan(html.indexOf('class="policy-members"'));
+  });
   it("loads policy config, services, assigned groups, members and consumption without inventory or writes", async () => {
     const { snapshot, snapshots, fetcher } = await load();
     expect(snapshot.tiers.standard.policy.state).toBe("ready");

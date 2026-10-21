@@ -70,6 +70,16 @@ export class AzureOnboardingStore implements OnboardingStore {
       throw error;
     }
   }
+  async routing(objectId: string): Promise<string | null> {
+    try {
+      const entry = await this.index.getEntity<{ budgetId: string }>(this.tenantId, objectId);
+      if (typeof entry.budgetId !== "string" || !entry.budgetId) throw new Error("Invalid requester index record.");
+      return entry.budgetId;
+    } catch (error) {
+      if (isStorageNotFound(error, "ResourceNotFound")) return null;
+      throw error;
+    }
+  }
   async seedRouting(objectId: string, budgetId: string): Promise<void> {
     try {
       await this.index.createEntity({ partitionKey: this.tenantId, rowKey: objectId, budgetId });
@@ -77,7 +87,7 @@ export class AzureOnboardingStore implements OnboardingStore {
       if (!hasStatus(error, 409)) throw error;
       const existing = await this.index.getEntity<{ budgetId: string }>(this.tenantId, objectId);
       if (existing.budgetId !== budgetId) throw new ApiError(409, "routing-conflict",
-        "A requester already has a different mapping. Import may be partial; existing routing was not overwritten.");
+        "A requester already has a different mapping. Existing routing was not overwritten.");
     }
   }
 }

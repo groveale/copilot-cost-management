@@ -1,6 +1,6 @@
 import type { Context, Decision, FulfilmentUpdate, Page, RequestRecord, Submission } from "../../api/src/contracts";
-import type { Metadata } from "../../api/src/contracts";
-import type { BuDecision, BuSubmission, OnboardingRecord, WorkUpdate } from "../../api/src/onboarding";
+import type { Budget, Metadata } from "../../api/src/contracts";
+import type { AllocationInput, BuDecision, BuSubmission, MemberUpdate, OnboardingRecord, WorkUpdate } from "../../api/src/onboarding";
 export type { Context, Decision, Page, RequestRecord, Submission };
 export interface OnboardingCapabilities { isAdmin: boolean; bootstrapEnabled: boolean; objectId: string; displayName?: string; contactHint?: string }
 
@@ -51,7 +51,10 @@ export class RequestApi {
   }
   onboardingSetup(signal: AbortSignal): Promise<Metadata | null> { return this.call("onboarding/setup", signal); }
   bootstrap(input: unknown, signal: AbortSignal): Promise<{ budgets: number; mappings: number }> { return this.call("onboarding/bootstrap", signal, input); }
-  allocation(budgetId: string, signal: AbortSignal, input?: { operationId: string; standard: number; enhanced: number }): Promise<OnboardingRecord | null> {
+  member(budgetId: string, input: MemberUpdate, signal: AbortSignal): Promise<{ budget: Budget }> {
+    return this.call(`budgets/${encodeURIComponent(budgetId)}/members`, signal, input);
+  }
+  allocation(budgetId: string, signal: AbortSignal, input?: AllocationInput): Promise<OnboardingRecord | null> {
     return this.call(`budgets/${encodeURIComponent(budgetId)}/allocation`, signal, input);
   }
 }

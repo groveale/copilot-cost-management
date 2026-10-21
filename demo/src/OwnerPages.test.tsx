@@ -4,6 +4,8 @@ import { RequestApi, type Context } from "./api";
 import { DemoAuth } from "./auth";
 import { parseConfig } from "./config";
 import { BusinessUnitList, OwnerNavigation, OwnerWorkspace, ownerLocation, type OwnerLocation } from "./HostedPortal";
+import { BudgetAllocation } from "./Onboarding";
+import { AddPolicyMember } from "./PolicyMembers";
 
 vi.mock("@azure/msal-browser", async (importOriginal) => ({
   ...await importOriginal<typeof import("@azure/msal-browser")>(),
@@ -53,6 +55,35 @@ describe("owner URL and page navigation", () => {
 });
 
 describe("focused owner screens", () => {
+  it.each(["standard", "enhanced"] as const)("renders explicit %s editors without running Graph or API actions on mount", (tier) => {
+    vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+    const api = new RequestApi("https://example.test", async () => "synthetic-token");
+    const auth = new DemoAuth(config);
+    const token = vi.spyOn(auth, "token");
+    const allocation = vi.spyOn(api, "allocation");
+    const member = vi.spyOn(api, "member");
+    const onBusyChange = vi.fn();
+    const account = { tenantId: id(1), localAccountId: id(3), homeAccountId: "home",
+      environment: "login.microsoftonline.com", username: "owner@example.test" };
+    const budget = { ...config.budgets[0], approvedCreditCeiling: 2_000_000 };
+    const limits = renderToStaticMarkup(<BudgetAllocation budget={budget} tier={tier} api={api} auth={auth} account={account}
+      onApplied={() => undefined} onBusyChange={onBusyChange} />);
+    expect(limits).toContain('aria-expanded="false"');
+    expect(limits).toContain('hidden=""');
+    expect(limits).toContain("Monthly allocation (credits)");
+    expect(limits).toContain("Per-user credit limit");
+    expect(limits).toContain("Save policy limits");
+    expect(limits).not.toContain('type="range"');
+    const members = renderToStaticMarkup(<AddPolicyMember budget={budget} tier={tier} serviceId="cowork" api={api}
+      auth={auth} account={account} disabled={false} onAdded={() => undefined} onBusyChange={onBusyChange} />);
+    expect(members).toContain('aria-expanded="false"');
+    expect(members).toContain('hidden=""');
+    expect(members).toContain("Sign-in email (UPN)");
+    expect(members).toContain("Find user");
+    expect(members).toContain("already in the other tier cannot be added");
+    expect(token).not.toHaveBeenCalled(); expect(allocation).not.toHaveBeenCalled();
+    expect(member).not.toHaveBeenCalled(); expect(onBusyChange).not.toHaveBeenCalled();
+  });
   it("lands on BU metadata without mounting Graph details, requests or setup forms", () => {
     const html = workspace({ page: "budgets" });
     for (const text of ["Your business units", "Legal", "Finance", "LEGAL-01", "FIN-02", "$20,000.00", "Not configured",
@@ -83,7 +114,8 @@ describe("focused owner screens", () => {
     const html = workspace({ page: "requests" });
     expect(html).toContain("Owner approval inbox");
     expect(html).toContain("across all your business units");
-    expect(html).toContain("manual return to Standard");
+    expect(html).toContain("Approval moves the requester");
+    expect(html).not.toContain("manual return to Standard");
     expect(html).not.toContain("Refresh policies");
     expect(html).not.toContain("View policies");
     expect(html).not.toContain('name="costCenter"');
@@ -93,6 +125,9 @@ describe("focused owner screens", () => {
     expect(html).toContain("Request a new business unit");
     expect(html).toContain("Your BU requests");
     expect(html).toContain('name="costCenter"');
+    expect(html).toContain("bu-request-form");
+    expect(html).toContain("bu-form-grid");
+    expect(html).toContain("Proposed monthly credit allocation");
     expect(html).not.toContain("Owner approval inbox");
     expect(html).not.toContain("View policies");
     expect(html).not.toContain("Refresh policies");

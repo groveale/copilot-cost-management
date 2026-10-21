@@ -75,3 +75,30 @@ it("authenticates and validates the fulfilment endpoint without accepting browse
     { tenantId: process.env.TENANT_ID, objectId: "10000000-0000-4000-8000-000000000004" }, "a".repeat(64), { action: "claim", etag: "specific" },
   );
 });
+it("validates the member endpoint before calling its currently authorized routing service", async () => {
+  const id = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const member = vi.spyOn(OnboardingService.prototype, "member").mockRejectedValue(new ApiError(409, "routing-conflict", "Another BU owns this route."));
+  const path = "budgets/legal/members";
+  const input = { action: "check", userId: id(5),
+    tiers: { standard: { policyId: id(6), groupId: id(7) }, enhanced: { policyId: id(8), groupId: id(9) } } };
+  for (const [body, expected] of [
+    [input, 409], [{ ...input, action: "complete" }, 400],
+    [{ ...input, userId: "not-a-guid" }, 400],
+    [{ ...input, requesterId: id(10) }, 400],
+  ] as const) {
+    const request = new HttpRequest({ url: `https://example.test/api/v1/${path}`, method: "POST", params: { path },
+      headers: { "content-type": "application/json" }, body: { string: JSON.stringify(body) } });
+    expect((await handler(request, new InvocationContext({ functionName: "test", logHandler: vi.fn() }))).status).toBe(expected);
+  }
+  expect(member).toHaveBeenCalledExactlyOnceWith(
+    { tenantId: process.env.TENANT_ID, objectId: id(4) }, "legal", input,
+  );
+});
+it("supports allocation routes for imported budget IDs as well as generated BUs", async () => {
+  const allocation = vi.spyOn(OnboardingService.prototype, "allocation").mockResolvedValue(null);
+  expect((await response("budgets/legal/allocation")).status).toBe(200);
+  expect(allocation).toHaveBeenCalledWith(expect.any(Object), "legal", undefined);
+  const get = vi.spyOn(OnboardingService.prototype, "get").mockRejectedValue(new ApiError(409, "test-conflict", "Test operation"));
+  expect((await response("onboarding/allocation-legal")).status).toBe(409);
+  expect(get).toHaveBeenCalledWith(expect.any(Object), "allocation-legal");
+});

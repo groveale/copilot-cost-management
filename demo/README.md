@@ -98,11 +98,22 @@ MSAL v5 redirect bridge and both HTML build entries are required.
   must confirm Enhanced without Standard before **Enhanced move applied** is
   recorded. No policy caps, billing settings or user objects are changed.
 - Both permanent and temporary approvals apply this move. Temporary requests
-  require **manual return to Standard** at the recorded UTC boundary; the UI
-  flags overdue returns rather than implying that access expired automatically.
-  An authorized owner/admin must review actual memberships, restore/verify
-  Standard, then remove the appropriate Enhanced membership manually.
+  retain their recorded UTC boundary, but return-to-Standard workflows and
+  overdue reminders are out of scope for this MVP. Group membership does not
+  automatically revert when that timestamp passes. Expiry still prevents new
+  late approvals/upgrades; it is not an access-expiry mechanism.
   There is no scheduler, automatic reversion, notification or native Cowork action.
+- Credit requests start collapsed in both the owner inbox and requester history,
+  showing status, BU, submitted date and duration. **Expand / Collapse** reveals
+  IDs, justification, audit details and owner approval/retry actions. Collapsing
+  retains the rejection draft and does not cancel an in-progress operation;
+  progress/errors remain visible outside the collapsed details.
+  Status badges use the same colours as BU requests: orange for pending or
+  unfinished upgrades, green only after the Enhanced move is confirmed, and red
+  for rejected requests. Approved-but-not-applied, in-progress, needs-attention
+  and expired incomplete requests remain orange with their explanatory text.
+  Applied temporary upgrades remain green after the requested period; that
+  timestamp does not automatically revert membership.
 - Request progress is durable in the existing Requests table. Five-minute leases
   and conditional ETags coordinate attempts; before each membership mutation the
   API rechecks current ownership, requester routing, frozen policy/group mappings
@@ -123,8 +134,9 @@ MSAL v5 redirect bridge and both HTML build entries are required.
 Owners automatically load Graph policy configuration, assigned groups, direct
 members and current user/service consumption **after opening a BU**. Returning
 to a BU after an approval reads fresh Graph data; no policy details are loaded
-alongside the request inbox. Admin
-inventory and approved-budget allocation limits also load on entry. Reads use
+alongside the request inbox. Admin inventory also loads on entry. Policy cards
+show the monthly allocation and per-user cap; settings/groups, member lists and
+each member's detailed consumption start collapsed. Reads use
 MSAL's cached/silently renewed Graph token; refresh does not force a popup.
 **Grant Graph access** appears only when an automatic read requires user
 interaction. Explicit provisioning, upgrade and allocation actions also preflight
@@ -135,6 +147,33 @@ own explicit actions, not background effects. The existing eight
 operator-selected delegated scopes are unchanged. Preview Graph APIs are for
 evaluation, not supported production applications. Nested membership expansion,
 historical spend and reconciled billing are not provided.
+
+Each policy has an **Edit** button opening numeric **Monthly allocation** and
+**Per-user credit limit** fields, not a slider. The editor reads fresh limits only
+when opened; **Save policy limits** creates a durable, resumable allocation plan.
+The other policy's current limits are preserved, and the combined monthly limits
+cannot exceed the BU's stored approved ceiling. Reduce one policy before increasing
+the other when reallocating a fully allocated budget. Per-user limits can be zero
+or explicitly Unlimited; per-user/billing settings on the other policy are not
+changed. Billing methods and onboarding defaults are not edited. Budgets without
+an approved ceiling show why limit editing is unavailable. Stale selected-policy
+values block saving; failed/partial edits expose **Resume saved policy edit**.
+
+**Add member**, beside **Members and consumption**, looks up an existing enabled
+directory user by their exact sign-in email (UPN) and requires an explicit
+confirmation. It does not create accounts or move people between tiers. Direct
+or inherited membership of the other tier blocks the add, as do unsafe groups,
+changed policy assignments, and conflicting private BU routing. The browser uses
+delegated Graph to add only the mapped group's member `$ref`, then verifies
+direct/transitive membership. The API rechecks current ownership and mappings
+before it additively saves that user's requester routing; another BU's mapping is
+never overwritten. Existing direct membership is reconciled on retry, including
+after a lost response or a failed routing save. Graph membership and private
+routing are not one transaction; errors explicitly require retry/reconciliation.
+The Function trusts the authorized browser's verification report and does not
+proxy or independently attest to Graph. Successful edits/adds refresh the policy
+cards and show confirmation; balance/policy readings may lag. No Graph writes
+occur just from opening cards or disclosures.
 
 Graph reads remain serialized with bounded throttling retries, pagination and
 independent resource errors. Zero, unavailable and unlimited quantities remain
@@ -148,6 +187,15 @@ justification without Graph permissions. The API derives proposed ownership
 from the validated object ID. A separate configured administrator reviews
 cost-centre/cross-charge information and the fixed policy defaults, then approves
 or rejects. There is no existing-BU template picker or dependency on Legal.
+The BU request uses labels above full-width controls, a separate credit-allocation
+summary and a full-width justification field. Name/cost centre sit side by side
+on wider screens and stack on mobile; submission fields and validation are unchanged.
+BU request cards start collapsed in both the owner's setup history and the admin
+queue. The BU name, cost centre, monthly budget, submitted date and status badge
+remain visible: orange **Awaiting approval** / **Provisioning**, green **Completed**,
+red **Rejected**. Status text accompanies the colour; approval alone is not
+completion. Expand to review details or use admin approval/recovery controls.
+Collapsing preserves review drafts and in-flight work; recorded errors remain visible.
 
 Fixed defaults live in private `metadata.onboardingDefaults` JSON:
 Standard has **10,000 credits per person** and Enhanced **25,000**, both
@@ -170,7 +218,7 @@ spend or a purchase. Per-user caps/billing methods are reviewed independently.
 
 Progress and IDs are persisted; partial or uncertain outcomes are not reported
 as complete. Refresh/resume rather than submitting duplicates. New ownership is
-published after browser verification. Owners can then reallocate within the
+published after browser verification. Owners can then edit each policy within the
 stored approved ceiling, decreasing one tier before increasing the other.
 Separately authorized admin-center changes can bypass this application ceiling.
 Existing Legal resources, requester routing and allowance approvals are preserved.

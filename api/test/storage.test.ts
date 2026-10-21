@@ -186,6 +186,18 @@ describe("Azure Table persistence adapter", () => {
         expect(sdk.updateEntity).not.toHaveBeenCalled();
         await expect(onboarding().seedRouting(id, "other")).rejects.toMatchObject({ status: 409 });
       });
+      it("reads member routing without hiding storage errors or malformed mappings", async () => {
+        sdk.getEntity.mockResolvedValue({ budgetId: "legal" });
+        expect(await onboarding().routing(id)).toBe("legal");
+        sdk.getEntity.mockRejectedValue({ statusCode: 404, code: "ResourceNotFound" });
+        expect(await onboarding().routing(id)).toBeNull();
+        for (const error of [{ statusCode: 404, code: "TableNotFound" }, { statusCode: 403, code: "AuthorizationPermissionMismatch" }]) {
+          sdk.getEntity.mockRejectedValue(error);
+          await expect(onboarding().routing(id)).rejects.toEqual(error);
+        }
+        sdk.getEntity.mockResolvedValue({ budgetId: "" });
+        await expect(onboarding().routing(id)).rejects.toThrow("Invalid requester index");
+      });
     });
   it("maps duplicate conditional creates and stale conditional updates to conflicts", async () => {
     sdk.createEntity.mockRejectedValue({ statusCode: 409 });

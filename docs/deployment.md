@@ -23,8 +23,8 @@
 - GitHub has separate infrastructure/application federated identities. The only
   deployment-token exception is the site-scoped **frontend-only SWA token**.
 - Allowance-increase approval records a decision and applies the mapped
-  Standard-to-Enhanced group move in the owner's browser. Temporary moves require
-  manual return to Standard; no expiry worker or automatic reversion is provided.
+  Standard-to-Enhanced group move in the owner's browser. Return-to-Standard
+  workflows and reminders are out of scope; no expiry worker or automatic reversion is provided.
   BU onboarding approval is a separate real provisioning workflow. No notification,
   backups or recovery SLA.
 
@@ -348,28 +348,51 @@ private seed into the application.
   refresh preserve the owner screen (`ownerPage=budgets|requests|setup`) and
   selected `budget` query parameter. A URL never grants ownership: the requested
   BU must appear in the API's authorized context before any Graph reads.
-  Admin
-  inventory and allocation reads behave the same way. Interactive authorization
+  Admin inventory also reads automatically; policy editors fetch fresh limits
+  only when explicitly opened. Interactive authorization
   is offered only when silent acquisition requires it, never opened by an
   automatic read. Graph writes remain explicit. Permissions/roles are assumed, not inferred
   from group ownership. Request status refreshes while the onboarding page is
   open; there is no notification delivery.
-- **Allocate the approved monthly budget** supports later tier changes, such as
-  **1.5M Standard / 500K Enhanced** under the same 2M ceiling. Server-side plans
-  recheck current ownership, resource mappings and the approved ceiling.
-  Decreases happen before increases; actual Graph values and fresh policy ETags
-  are checked. Failed allocations retain a resumable plan.
+- Policy cards show monthly/per-user limits with an **Edit** button; technical
+  settings/groups, member lists and individual consumption details start
+  collapsed. The editor uses numeric monthly allocation and per-user cap fields,
+  with explicit Unlimited for the latter. It preserves the other tier rather
+  than transferring credits automatically. To reach **1.5M Standard / 500K
+  Enhanced** under a fully allocated 2M ceiling, save the Enhanced decrease first,
+  then the Standard increase. Plans recheck ownership, resource mappings and the
+  approved ceiling, use fresh Graph ETags and retain failed edits for explicit
+  resume. Stale selected-policy drafts or drift in the unedited policy's saved
+  allocation require reconciliation, not overwriting external changes.
+  Per-user edits do not change billing methods or fixed onboarding defaults.
+  Limit editing is unavailable without a stored approved BU ceiling.
 - This is an **application guardrail**, not a tenant-wide financial guarantee.
   Separately authorized admin-center/Graph changes can bypass it. API operations,
   metadata writes and Graph provisioning are not one atomic transaction.
-- Onboarding does not change existing requester routing. New group membership
-  and ordinary users' requester-index mappings remain explicit administration;
-  BU ownership alone is sufficient to expose the owner workspace.
+- Onboarding does not change existing requester routing. Owners can explicitly
+  **Add member** beside a policy's member list: exact UPN lookup, identity
+  confirmation, policy/group/user safety checks and other-tier membership
+  rejection precede a delegated Graph member-reference add. The browser verifies
+  direct/transitive membership before reporting completion. A scoped
+  `POST budgets/{id}/members` check/complete flow rechecks current owner/admin
+  access and frozen mappings and creates same-BU routing additively, using the
+  existing RequesterBudgetIndex permissions. Another BU's route is never
+  overwritten. This API is not a Graph proxy and trusts authorized browser
+  verification, as provisioning/upgrade completion already does.
+  An interrupted add or routing failure is repaired by an explicit idempotent
+  retry; there is no atomic Graph/storage transaction or automatic rollback.
+  Existing direct members need no duplicate add. No tier move or account
+  creation is offered. BU ownership alone still exposes the owner workspace.
 
 Before customer use, exercise ordinary-user submission, administrator approval,
 actual Graph provisioning, owner refresh, allocation/reload and lost-response
 recovery in the deployed environment. Unit tests use fake Graph responses; they
 do not establish that tenant provisioning or private storage access works live.
+Also exercise per-policy monthly/per-user edits, ceiling rejection, stale drafts,
+unedited-policy drift, saved-edit resume, exact-UPN membership confirmation,
+other-tier/direct/inherited rejection, another-BU routing conflicts and retry after
+an interrupted add/routing save. Confirm disclosures work on mobile and in both
+themes, and that reading/expanding alone never triggers writes.
 
 ## GitHub configuration
 
@@ -474,9 +497,12 @@ minimal `/api/health` reports **process liveness only**, not storage readiness.
    uncertain-response retry without duplicate writes, an active/expired lease,
    changed owner/routing/group mappings, and inherited membership requiring
    administrator review. Loading/refreshing must not initiate membership writes.
-   Check both permanent and temporary requests: temporary moves show manual
-   return deadlines/overdue warnings, never promise automatic reversion, and
+   Check both permanent and temporary requests: temporary moves retain their
+   request timestamps without manual-return/overdue reminders, never promise automatic reversion, and
    expired requests cannot authorize further membership writes.
+   Requests should start collapsed; expanding reveals the full record and
+   decision/retry controls. Collapsing must preserve rejection drafts, ongoing
+   operations and visible errors, without initiating any writes.
    Graph reads may lag behind verified membership changes. Rejection is API-only.
 6. Confirm signed-out privacy and account-switch cleanup in the browser. Test
    storage denial as an unprivileged identity, without credential fallback.
@@ -524,6 +550,11 @@ erase Tables with application code. Review infrastructure rollback with what-if.
 The optional request `fulfilment` field preserves legacy records but older strict
 readers cannot read newly upgraded records. Deploy the compatible API before
 using the new UI; do not roll back to a version that rejects this field.
+Policy editing similarly adds optional `perUserEdit` to stored allocation
+operations and a scoped member-routing endpoint. Deploy this compatible API
+before the corresponding UI. After a policy-edit operation is saved, rollback
+only to readers that understand `perUserEdit`; legacy operations without it
+continue to mean monthly-allocation-only updates.
 The API stores approval/progress and rechecks authorization using existing storage
 roles; Graph remains delegated browser execution with no new application
 permissions, proxy or background worker. A completed state is the authorized

@@ -119,6 +119,16 @@ footer { margin-top: 24px; }
 .tier-panel h2 { overflow-wrap: anywhere; }
 .tier-panel .section-heading { align-items: flex-start; gap: 12px; }
 .tier-panel h3 { margin: 28px 0 12px; padding-top: 20px; border-top: 1px solid var(--cp-border); font-size: 18px; }
+.policy-more, .policy-members, .member-more { margin-top: 16px; }
+.policy-editor, .policy-member-editor { margin: 16px 0; }
+.policy-limit-form label:not(.checkbox-choice), .policy-member-form label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-weight: 600; min-width: 0; }
+.policy-limit-form input[type="number"], .policy-member-form input { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--cp-border-strong); border-radius: 10px; background: var(--cp-surface); color: var(--cp-text); font: inherit; font-weight: 400; }
+.checkbox-choice { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.checkbox-choice input { accent-color: var(--cp-accent); }
+.policy-member-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.policy-member-form label { flex: 1 1 220px; margin: 0; }
+.member-confirmation { border: 1px solid var(--cp-border); background: var(--cp-surface-soft); border-radius: 10px; padding: 16px; margin-top: 16px; overflow-wrap: anywhere; }
+.member-more > summary { font-size: 13px; }
 .allowances { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
 .allowances strong { display: block; font-size: 20px; line-height: 1.4; margin-top: 4px; overflow-wrap: anywhere; }
 .policy-fields { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 16px; }
@@ -154,6 +164,32 @@ a { color: var(--cp-link); }
 .request-form { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
 .request-form > label, .request-form legend { font-weight: 600; }
 .request-form > p { margin-bottom: 0; }
+.request-card { padding: 16px 20px; margin-top: 12px; }
+.request-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.request-card-heading > div { min-width: 0; }
+.request-card-heading h3 { margin: 0 0 4px; font-size: 16px; overflow-wrap: anywhere; }
+.request-card-heading p { margin: 0; overflow-wrap: anywhere; }
+.request-card-heading button { flex-shrink: 0; }
+.request-card-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.request-status-badge { gap: 8px; max-width: 100%; white-space: normal; text-transform: none; color: var(--cp-text); }
+.request-status-badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.request-status-pending, .request-status-provisioning { border-color: var(--cp-warning); }
+.request-status-pending::before, .request-status-provisioning::before { background: var(--cp-warning); }
+.request-status-completed { border-color: var(--cp-success); }
+.request-status-completed::before { background: var(--cp-success); }
+.request-status-rejected { border-color: var(--cp-danger); }
+.request-status-rejected::before { background: var(--cp-danger); }
+.request-card-details { border-top: 1px solid var(--cp-border); margin-top: 16px; padding-top: 16px; }
+.request-card > [role="alert"], .request-card > [role="status"] { margin: 12px 0 0; }
+.bu-request-form { width: 100%; max-width: 880px; }
+.bu-form-fields { display: grid; gap: 20px; padding: 24px; }
+.bu-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.bu-form-fields label { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-weight: 600; }
+.bu-form-fields input { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--cp-border-strong); border-radius: 10px; background: var(--cp-surface); color: var(--cp-text); font: inherit; font-weight: 400; }
+.bu-form-fields textarea { font-weight: 400; }
+.bu-form-fields p { margin: 0; }
+.bu-budget-preview { padding: 16px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-bg-elevated); }
+.bu-budget-preview p { margin-top: 8px; font-weight: 600; }
 textarea { width: 100%; min-width: 0; resize: vertical; padding: 12px; border: 1px solid var(--cp-border-strong); border-radius: 10px; background: var(--cp-surface); color: var(--cp-text); font: inherit; }
 fieldset { width: 100%; min-width: 0; margin: 12px 0; padding: 16px; border: 1px solid var(--cp-border); border-radius: 10px; }
 legend { padding: 0 8px; }
@@ -180,4 +216,7 @@ legend { padding: 0 8px; }
   .balance-fields dd, .policy-fields dd { margin-bottom: 8px; }
   .allowances { grid-template-columns: 1fr; }
   .request-layout { grid-template-columns: 1fr; }
+  .request-card-heading { flex-wrap: wrap; }
+  .bu-form-grid { grid-template-columns: 1fr; }
+  .bu-form-fields { padding: 16px; }
 }

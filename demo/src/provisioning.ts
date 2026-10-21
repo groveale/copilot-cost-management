@@ -55,10 +55,14 @@ async function policy(graph: GraphClient, id: string, signal: AbortSignal) {
   return { data, etag: result.etag };
 }
 export async function readAllocation(graph: GraphClient, budget: BudgetConfig, signal: AbortSignal) {
-  const standard = quantity((await policy(graph, budget.tiers.standard.policyId, signal)).data.periodLimit);
-  const enhanced = quantity((await policy(graph, budget.tiers.enhanced.policyId, signal)).data.periodLimit);
+  const standardPolicy = (await policy(graph, budget.tiers.standard.policyId, signal)).data;
+  const enhancedPolicy = (await policy(graph, budget.tiers.enhanced.policyId, signal)).data;
+  const standard = quantity(standardPolicy.periodLimit);
+  const enhanced = quantity(enhancedPolicy.periodLimit);
   if (standard === null || enhanced === null) throw new Error("An actual policy is unlimited; administrator reconciliation is required.");
-  return { standard, enhanced };
+  return { standard, enhanced, perUser: {
+    standard: quantity(standardPolicy.perUserLimit, false), enhanced: quantity(enhancedPolicy.perUserLimit, false),
+  } };
 }
 async function ready(graph: GraphClient, id: string, signal: AbortSignal) {
   for (let attempt = 0; attempt < 9; attempt++) {
@@ -87,6 +91,10 @@ async function verifyPolicy(graph: GraphClient, record: OnboardingRecord, tier: 
   if (!id || !groupId) throw new Error("Missing recorded group or policy ID.");
   const current = await ready(graph, id, signal);
   if (quantity(current.data.periodLimit) !== record[tier].credits) throw new Error("Actual policy cap differs from the approved allocation. Reconcile before completing.");
+  if (record.kind === "allocation" && record.perUserEdit?.tier === tier &&
+      quantity(current.data.perUserLimit, false) !== record.perUserEdit.credits) {
+    throw new Error("Actual per-user limit differs from the saved policy edit. Refresh and resume.");
+  }
   if (record.kind === "onboarding") {
     if (current.data.displayName !== resourceNames(record, tier).policy ||
         JSON.stringify(templateSettings(current.data)) !== JSON.stringify({
@@ -179,17 +187,34 @@ export async function runProvisioning(api: RequestApi, graph: GraphClient, input
         return { tier, id, credits };
       }));
       actual.sort((a, b) => (record[a.tier].credits - a.credits) - (record[b.tier].credits - b.credits));
+      const editedTier = record.perUserEdit?.tier;
+      if (editedTier && actual.some((item) => item.tier !== editedTier && item.credits !== record[item.tier].credits)) {
+        throw new Error("The other policy allocation changed. No external changes were overwritten; reconcile the saved edit before resuming.");
+      }
       for (const item of actual) {
         const current = await policy(graph, item.id, signal);
         const other = actual.find((value) => value.tier !== item.tier)!;
         const otherCurrent = await policy(graph, other.id, signal);
         const otherCredits = quantity(otherCurrent.data.periodLimit);
         if (otherCredits === null) throw new Error("The other policy is unlimited; reconcile external changes first.");
+        if (record.perUserEdit && other.tier !== record.perUserEdit.tier && otherCredits !== record[other.tier].credits) {
+          throw new Error("The other policy allocation changed. Reconcile the saved edit; it was not overwritten.");
+        }
         const currentCredits = quantity(current.data.periodLimit);
         if (currentCredits === null) throw new Error("An external change made this policy unlimited.");
         if (record[item.tier].credits >= currentCredits) checkAllocation(record[item.tier].credits, otherCredits, record.approvedCredits);
-        if (quantity(current.data.periodLimit) !== record[item.tier].credits) {
-          await graph.patch(`${base}/${item.id}`, { periodLimit: limited(record[item.tier].credits) }, signal, current.etag);
+        const edit = record.perUserEdit?.tier === item.tier ? record.perUserEdit : undefined;
+        const changePerUser = !!edit && quantity(current.data.perUserLimit, false) !== edit.credits;
+        if (currentCredits !== record[item.tier].credits || changePerUser) {
+          if (record.perUserEdit && record.perUserEdit.tier !== item.tier) {
+            throw new Error("The other policy allocation changed. Reconcile the saved edit; it was not overwritten.");
+          }
+          await save({ action: "heartbeat" });
+          await graph.patch(`${base}/${item.id}`, {
+            ...(currentCredits !== record[item.tier].credits ? { periodLimit: limited(record[item.tier].credits) } : {}),
+            ...(changePerUser && edit ? { perUserLimit: edit.credits === null ?
+              { "@odata.type": "#microsoft.graph.unlimitedCostManagementQuantity", unit: "copilotCredit" } : limited(edit.credits) } : {}),
+          }, signal, current.etag);
           await ready(graph, item.id, signal);
         }
       }
