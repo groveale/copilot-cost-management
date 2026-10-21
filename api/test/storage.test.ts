@@ -16,8 +16,9 @@ vi.mock("@azure/storage-blob", () => ({
     getContainerClient() { return { getBlockBlobClient: () => ({ download: sdk.download, uploadData: sdk.uploadData }) }; }
   },
 }));
-import { AzureStore } from "../src/storage.js";
+import { AzureStore, isStorageNotFound, storageErrorCode } from "../src/storage.js";
 import { AzureOnboardingStore } from "../src/onboarding-storage.js";
+import { ApiError } from "../src/model.js";
 import type { RequestRecord } from "../src/contracts.js";
 
 const id = "10000000-0000-4000-8000-000000000001";
@@ -33,6 +34,95 @@ const onboarding = () => new AzureOnboardingStore(id, "https://example.table.cor
   { getToken: async () => ({ token: "synthetic-not-a-credential", expiresOnTimestamp: 1 }) });
 beforeEach(() => vi.resetAllMocks());
 describe("Azure Table persistence adapter", () => {
+  describe("real Tables SDK error decoding", () => {
+    it.each([
+      { code: "ResourceNotFound", statusCode: 404, missingEntity: true },
+      { code: "TableNotFound", statusCode: 404, missingEntity: false },
+      { code: "AuthorizationPermissionMismatch", statusCode: 403, missingEntity: false },
+    ])("handles the SDK OData shape without hiding $code", async ({ code, statusCode, missingEntity }) => {
+      const { TableClient } = await vi.importActual<typeof import("@azure/data-tables")>("@azure/data-tables");
+      const client = new TableClient("https://synthetic.table.core.windows.net", "Requests", {
+        getToken: async () => ({ token: "synthetic-not-a-credential", expiresOnTimestamp: Date.now() + 60000 }),
+      }, {
+        retryOptions: { maxRetries: 0 },
+        httpClient: {
+          async sendRequest(request) {
+            const values = new Headers({ "content-type": "application/json;odata=minimalmetadata" });
+            return {
+              request, status: statusCode,
+              headers: {
+                get: (name: string) => values.get(name) ?? undefined,
+                has: (name: string) => values.has(name),
+                set: (name: string, value: string) => values.set(name, value),
+                delete: (name: string) => values.delete(name),
+                toJSON: () => Object.fromEntries(values),
+                [Symbol.iterator]: () => values.entries(),
+              },
+              bodyAsText: JSON.stringify({ "odata.error": { code, message: { lang: "en-US", value: "Synthetic SDK error." } } }),
+            };
+          },
+        },
+      });
+      const error: unknown = await client.getEntity(id, request.id).catch((error: unknown) => error);
+      expect(error).toMatchObject({ name: "RestError", statusCode, details: { odataError: { code } } });
+      expect(storageErrorCode(error)).toBe(code);
+      expect(isStorageNotFound(error, "ResourceNotFound")).toBe(missingEntity);
+      sdk.getEntity.mockRejectedValue(error);
+      if (missingEntity) {
+        expect(await store().get(id, request.id)).toBeNull();
+        expect(await store().routing(caller)).toBeNull();
+        expect(await onboarding().get(request.id)).toBeNull();
+      } else {
+        await expect(store().get(id, request.id)).rejects.toBe(error);
+        await expect(store().routing(caller)).rejects.toBe(error);
+        await expect(onboarding().get(request.id)).rejects.toBe(error);
+      }
+    });
+    it("supports parsed-response error codes and does not override a top-level failure", () => {
+      const nested = { response: { parsedBody: { odataError: { code: "ResourceNotFound" } } }, statusCode: 404 };
+      expect(isStorageNotFound(nested, "ResourceNotFound")).toBe(true);
+      expect(isStorageNotFound({ ...nested, code: "AuthorizationFailure" }, "ResourceNotFound")).toBe(false);
+      expect(isStorageNotFound({ ...nested, statusCode: 403 }, "ResourceNotFound")).toBe(false);
+      expect(storageErrorCode({ details: { odataError: { code: 404 } } })).toBeUndefined();
+      expect(storageErrorCode(null)).toBeUndefined();
+    });
+  });
+  describe("workspace metadata initialization", () => {
+    it("reports actionable setup-required without blocking the initial onboarding import", async () => {
+      sdk.download.mockRejectedValue({ statusCode: 404, code: "BlobNotFound" });
+      await expect(store().metadata()).rejects.toBeInstanceOf(ApiError);
+      await expect(store().metadata()).rejects.toMatchObject({
+        status: 409, code: "setup-required", message: expect.stringContaining('"Request a new BU"'),
+      });
+      expect(await onboarding().metadata()).toEqual({ metadata: null, etag: null });
+      expect(sdk.uploadData).not.toHaveBeenCalled();
+    });
+    it.each([
+      { statusCode: 404, code: "ContainerNotFound" },
+      { statusCode: 404, code: "ResourceNotFound" },
+      { statusCode: 404 },
+      { statusCode: 403, code: "AuthorizationPermissionMismatch" },
+      { statusCode: 403, code: "BlobNotFound" },
+      new Error("Storage connection failed."),
+    ])("preserves non-initialization storage failures %#", async (error) => {
+      sdk.download.mockRejectedValue(error);
+      await expect(store().metadata()).rejects.toEqual(error);
+      await expect(onboarding().metadata()).rejects.toEqual(error);
+    });
+    it("loads the existing workspace unchanged after the initial import", async () => {
+      const metadata = { version: 1, tenantId: id, serviceId: "cowork", budgets: [] };
+      sdk.download.mockResolvedValue({
+        etag: "metadata-etag", readableStreamBody: Readable.from([Buffer.from(JSON.stringify(metadata))]),
+      });
+      expect(await store().metadata()).toEqual(metadata);
+    });
+    it("does not hide invalid metadata behind the first-run setup message", async () => {
+      sdk.download.mockResolvedValue({
+        etag: "metadata-etag", readableStreamBody: Readable.from([Buffer.from('{"version":99}')]),
+      });
+      await expect(store().metadata()).rejects.not.toBeInstanceOf(ApiError);
+    });
+  });
   it("persists searchable routing fields with a versioned payload, not an unconditional upsert", async () => {
     expect(await store().create(request)).toBe(true);
     expect(sdk.createEntity).toHaveBeenCalledWith({

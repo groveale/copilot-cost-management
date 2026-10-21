@@ -3,14 +3,11 @@ import { BlobServiceClient } from "@azure/storage-blob";
 import type { TokenCredential } from "@azure/identity";
 import type { Metadata } from "./contracts.js";
 import { ApiError } from "./model.js";
-import { readMetadata } from "./storage.js";
+import { isStorageNotFound, readMetadata } from "./storage.js";
 import { onboardingRecordSchema, type OnboardingRecord, type OnboardingStore } from "./onboarding.js";
 
 function hasStatus(error: unknown, statusCode: number) {
   return typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === statusCode;
-}
-function hasCode(error: unknown, code: string) {
-  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 function record(entity: TableEntityResult<Record<string, unknown>>): OnboardingRecord {
   if (typeof entity.payload !== "string" || !entity.etag) throw new Error("Invalid stored onboarding operation.");
@@ -34,7 +31,7 @@ export class AzureOnboardingStore implements OnboardingStore {
   }
   async get(id: string) {
     try { return record(await this.requests.getEntity(this.tenantId, id)); }
-    catch (error) { if (hasStatus(error, 404) && hasCode(error, "ResourceNotFound")) return null; throw error; }
+    catch (error) { if (isStorageNotFound(error, "ResourceNotFound")) return null; throw error; }
   }
   async create(value: OnboardingRecord) {
     try { await this.requests.createEntity(entity(value)); return true; }
@@ -58,7 +55,7 @@ export class AzureOnboardingStore implements OnboardingStore {
   async metadata() {
     try { return await readMetadata(this.blob, this.tenantId); }
     catch (error) {
-      if (hasStatus(error, 404) && hasCode(error, "BlobNotFound")) return { metadata: null, etag: null };
+      if (isStorageNotFound(error, "BlobNotFound")) return { metadata: null, etag: null };
       throw error;
     }
   }

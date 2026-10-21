@@ -51,6 +51,13 @@ it("surfaces failures and correlation IDs without successful fallback data", asy
     vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: "Access denied", correlationId: "reference" }), { status: 403 })));
   await expect(api.history(new AbortController().signal)).rejects.toThrow("Access denied Reference: reference");
 });
+it("accepts explicit JSON null for uninitialized setup and absent allocation operations", async () => {
+  const transport = vi.fn(async () => new Response("null", { headers: { "Content-Type": "application/json" } }));
+  const api = new RequestApi("https://example.test", async () => "token", transport);
+  const signal = new AbortController().signal;
+  expect(await api.onboardingSetup(signal)).toBeNull();
+  expect(await api.allocation(`bu-${"a".repeat(24)}`, signal)).toBeNull();
+});
 it("keeps pagination cursors inside the query value", async () => {
   const transport = vi.fn().mockResolvedValue(new Response('{"items":[]}'));
   const api = new RequestApi("https://example.test", async () => "token", transport);

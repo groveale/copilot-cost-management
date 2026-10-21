@@ -3,7 +3,7 @@ import { BlobServiceClient, type BlockBlobClient } from "@azure/storage-blob";
 import { AzureCliCredential, ManagedIdentityCredential, type TokenCredential } from "@azure/identity";
 import { z } from "zod";
 import type { Caller, Metadata, Page, RequestRecord } from "./contracts.js";
-import { parseMetadata, validateStoredRequest } from "./model.js";
+import { ApiError, parseMetadata, validateStoredRequest } from "./model.js";
 import type { Store } from "./service.js";
 
 export function credential(): TokenCredential {
@@ -31,9 +31,25 @@ export async function readMetadata(blob: BlockBlobClient, tenantId: string) {
 function status(error: unknown, code: number): boolean {
   return typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === code;
 }
-function entityNotFound(error: unknown): boolean {
-  return status(error, 404) && typeof error === "object" && error !== null &&
-    "code" in error && error.code === "ResourceNotFound";
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+export function storageErrorCode(error: unknown): string | undefined {
+  if (!isObject(error)) return undefined;
+  if (typeof error.code === "string" && error.code) return error.code;
+  const details = error.details;
+  if (isObject(details) && isObject(details.odataError) && typeof details.odataError.code === "string") {
+    return details.odataError.code;
+  }
+  const response = error.response;
+  if (isObject(response) && isObject(response.parsedBody) && isObject(response.parsedBody.odataError) &&
+      typeof response.parsedBody.odataError.code === "string") {
+    return response.parsedBody.odataError.code;
+  }
+  return undefined;
+}
+export function isStorageNotFound(error: unknown, code: string): boolean {
+  return status(error, 404) && storageErrorCode(error) === code;
 }
 const storedSchema = z.object({
   version: z.literal(1), id: z.string().regex(/^[a-f0-9]{64}$/),
@@ -64,7 +80,15 @@ export class AzureStore implements Store {
     this.blobs = new BlobServiceClient(blobUrl, token);
   }
   async metadata(): Promise<Metadata> {
-    return (await readMetadata(this.blobs.getContainerClient("metadata").getBlockBlobClient("budgets.json"), this.tenantId)).metadata;
+    try {
+      return (await readMetadata(this.blobs.getContainerClient("metadata").getBlockBlobClient("budgets.json"), this.tenantId)).metadata;
+    } catch (error) {
+      if (isStorageNotFound(error, "BlobNotFound")) {
+        throw new ApiError(409, "setup-required",
+          'Budget setup is not complete. Open "Request a new BU" to continue. An onboarding administrator can import the initial private JSON there, then refresh the workspace.');
+      }
+      throw error;
+    }
   }
   async routing(caller: Caller): Promise<string | null> {
     try {
@@ -72,13 +96,13 @@ export class AzureStore implements Store {
       if (typeof entry.budgetId !== "string" || !entry.budgetId) throw new Error("Invalid requester index record.");
       return entry.budgetId;
     } catch (error) {
-      if (entityNotFound(error)) return null;
+      if (isStorageNotFound(error, "ResourceNotFound")) return null;
       throw error;
     }
   }
   async get(tenant: string, id: string): Promise<RequestRecord | null> {
     try { return record(await this.requests.getEntity(tenant, id)); }
-    catch (error) { if (entityNotFound(error)) return null; throw error; }
+    catch (error) { if (isStorageNotFound(error, "ResourceNotFound")) return null; throw error; }
   }
   async create(request: RequestRecord): Promise<boolean> {
     try { await this.requests.createEntity(entity(request)); return true; }

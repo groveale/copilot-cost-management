@@ -4,7 +4,7 @@ import type { z } from "zod";
 import { createAuthenticator } from "./auth.js";
 import { ApiError, decisionSchema, seedSchema, submissionSchema, uuid } from "./model.js";
 import { RequestService } from "./service.js";
-import { AzureStore, credential, required } from "./storage.js";
+import { AzureStore, credential, required, storageErrorCode } from "./storage.js";
 import { allocationSchema, buDecisionSchema, buSubmissionSchema, workUpdateSchema } from "./onboarding.js";
 import { OnboardingService } from "./onboarding-service.js";
 import { AzureOnboardingStore } from "./onboarding-storage.js";
@@ -77,6 +77,8 @@ export async function handler(request: HttpRequest, context: InvocationContext):
     else if (/^requests\/[a-f0-9]{64}\/decision$/.test(path) && request.method === "POST") {
       result = await service.decide(caller, path.split("/")[1], await body(request, decisionSchema));
     } else throw new ApiError(404, "not-found", "API endpoint not found.");
+    // Functions treats jsonBody: null as absent, but nullable endpoints promise JSON null.
+    if (result === null) return { status: 200, headers: { ...headers, "Content-Type": "application/json" }, body: "null" };
     return { status: 200, headers, jsonBody: result };
   } catch (error) {
     const known = error instanceof ApiError;
@@ -84,8 +86,8 @@ export async function handler(request: HttpRequest, context: InvocationContext):
     const code = known ? error.code : "service-unavailable";
     if (!known) {
       const category = error instanceof Error ? error.name : "UnknownError";
-      const storageCode = typeof error === "object" && error !== null && "code" in error &&
-        typeof error.code === "string" && /^[A-Za-z0-9_]{1,80}$/.test(error.code) ? error.code : "unclassified";
+      const candidate = storageErrorCode(error);
+      const storageCode = candidate && /^[A-Za-z0-9_]{1,80}$/.test(candidate) ? candidate : "unclassified";
       context.error(`API failure ${correlationId}; category=${category}; code=${storageCode}. Check identity, storage and configuration.`);
     }
     return {

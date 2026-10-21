@@ -206,6 +206,17 @@ ordinary users can submit requests before their BU exists. Ownership comes from
 the API-validated tenant/object ID, never a form field or email. Available token
 name/contact claims are display hints only.
 
+Before the first import, the ordinary workspace returns HTTP 409
+`setup-required` when the metadata blob does not exist. Open **Request a new BU**
+to continue; a configured administrator can import the initial private JSON
+there, then refresh the workspace. The onboarding page remains available without
+that blob. Missing containers, denied access, invalid metadata and other storage
+failures remain errors; they are not treated as an empty initialized workspace.
+The setup endpoint sends literal JSON `null` before initialization, as does an
+allocation read with no existing operation; an empty HTTP body is not the JSON
+contract. Table lookups recognize the SDK's nested OData `ResourceNotFound` code
+for absent entities. Missing tables and authorization failures still surface.
+
 Configure a comma-separated `ONBOARDING_ADMIN_OBJECT_IDS` **repository secret**.
 This is private authorization configuration, not a credential or Function key.
 Use verified user object IDs, not UPNs. No other budget owner automatically
