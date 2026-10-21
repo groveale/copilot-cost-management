@@ -2,7 +2,8 @@ targetScope = 'resourceGroup'
 
 param prefix string = 'copilotcost'
 param location string = 'uksouth'
-param repository string = 'groveale/copilot-cost-management'
+@description('Exact sub_claim_prefix returned by the repository GitHub OIDC configuration, including immutable IDs when enabled.')
+param repositorySubjectPrefix string = 'repo:groveale@17550498/copilot-cost-management@1427172317'
 
 resource infra 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${prefix}-github-infra'
@@ -17,7 +18,7 @@ resource infraWhatIfTrust 'Microsoft.ManagedIdentity/userAssignedIdentities/fede
   name: 'github-whatif'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${repository}:environment:demo-whatif'
+    subject: '${repositorySubjectPrefix}:environment:demo-whatif'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
 }
@@ -28,7 +29,7 @@ resource infraApplyTrust 'Microsoft.ManagedIdentity/userAssignedIdentities/feder
   dependsOn: [ infraWhatIfTrust ]
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${repository}:environment:demo-infra'
+    subject: '${repositorySubjectPrefix}:environment:demo-infra'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
 }
@@ -37,7 +38,7 @@ resource appTrust 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIde
   name: 'github-app'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${repository}:environment:demo'
+    subject: '${repositorySubjectPrefix}:environment:demo'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
 }

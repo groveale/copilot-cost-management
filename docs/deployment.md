@@ -320,6 +320,23 @@ Create `demo-whatif`, `demo-infra` and `demo` environments. Restrict each to exa
 disable untrusted PR deployments. OIDC subjects in `bootstrap.bicep` match these
 exact names and the configured repository. Do not widen them to all branches.
 
+The bootstrap template's `repositorySubjectPrefix` parameter must match GitHub's
+actual `sub_claim_prefix`, not a guessed repository-name-only subject. Inspect it
+with:
+
+```powershell
+gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+```
+
+This repository enables immutable subjects, so its prefix includes the numeric
+owner and repository IDs. The former bootstrap `repository` parameter is
+replaced by the full `repositorySubjectPrefix`. Each existing federation record
+appends only its exact environment. If GitHub's subject configuration changes,
+review/apply the bootstrap template with an authorized operator before retrying
+CI login; a workflow cannot repair its own rejected trust. Keep the issuer,
+audience, identities and role assignments unchanged. Do not disable immutable
+subjects, broaden trust or introduce a client secret to fix `AADSTS700213`.
+
 Repository variables (public IDs/config used by the build):
 
 | Variable | Source |
