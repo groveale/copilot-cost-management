@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
-import type { Budget, Caller, Metadata } from "./contracts.js";
+import type { Budget, Caller, Metadata, PolicyDefaults } from "./contracts.js";
 import { ApiError, metadataSchema, seedSchema } from "./model.js";
 import { requestId } from "./service.js";
 import { checkAllocation, splitCredits, usdToCredits } from "./budget-math.js";
@@ -8,6 +8,10 @@ import { checkAllocation, splitCredits, usdToCredits } from "./budget-math.js";
 import { resourceKeys, type BuSubmission, type BuDecision, type WorkUpdate, type OnboardingRecord,
   type OnboardingStore, type allocationSchema } from "./onboarding.js";
 function conflict(message: string): never { throw new ApiError(409, "onboarding-conflict", message); }
+function sameDefaults(left: PolicyDefaults, right: PolicyDefaults): boolean {
+  return (["standard", "enhanced"] as const).every((tier) =>
+    left[tier].perUserCredits === right[tier].perUserCredits && left[tier].billingMethods === right[tier].billingMethods);
+}
 export class OnboardingService {
   constructor(private readonly store: OnboardingStore, private readonly admins: string[],
     private readonly clock: () => Date = () => new Date()) {}
@@ -78,9 +82,15 @@ export class OnboardingService {
     if (input.status === "rejected") {
       updated.status = "rejected"; updated.rejectionReason = input.reason;
     } else {
+      const defaults = (await this.store.metadata()).metadata?.onboardingDefaults;
+      if (!defaults) throw new ApiError(409, "onboarding-defaults-required",
+        "Fixed onboarding defaults are not configured. Import the private JSON under Admin > Setup requests before approving.");
+      if (!sameDefaults(input, defaults)) {
+        conflict("The policy defaults changed or differ from the private configuration. Refresh setup requests before approving.");
+      }
       updated.status = "provisioning"; updated.approvedCredits = usdToCredits(record.monthlyBudgetUsd);
-      updated.standard = { ...input.standard, credits: record.standard.credits };
-      updated.enhanced = { ...input.enhanced, credits: record.enhanced.credits };
+      updated.standard = { ...defaults.standard, credits: record.standard.credits };
+      updated.enhanced = { ...defaults.enhanced, credits: record.enhanced.credits };
       updated.reviewNote = input.reviewNote;
       updated.financeConfirmed = true;
     }
@@ -177,13 +187,17 @@ export class OnboardingService {
     const snapshot = await this.store.metadata();
     const metadata = snapshot.metadata ?? { ...input.metadata, budgets: [] };
     if (metadata.serviceId !== input.metadata.serviceId) conflict("Seed service does not match existing metadata.");
+    const defaults = input.metadata.onboardingDefaults;
+    if (defaults && metadata.onboardingDefaults && !sameDefaults(defaults, metadata.onboardingDefaults)) {
+      conflict("Onboarding defaults already exist with different settings. Nothing was reset.");
+    }
     const budgets = [...metadata.budgets];
     for (const budget of input.metadata.budgets) {
       const existing = budgets.find((item) => item.id === budget.id);
       if (existing && JSON.stringify(existing) !== JSON.stringify(budget)) conflict(`Budget ${budget.id} already exists with different settings. Nothing was reset.`);
       if (!existing) budgets.push(budget);
     }
-    const merged = metadataSchema.parse({ ...metadata, budgets });
+    const merged = metadataSchema.parse({ ...metadata, budgets, ...(defaults ? { onboardingDefaults: defaults } : {}) });
     await this.store.saveMetadata(merged, snapshot.etag);
     for (const mapping of input.requesterIndex) await this.store.seedRouting(mapping.objectId, mapping.budgetId);
     return { budgets: input.metadata.budgets.length, mappings: input.requesterIndex.length };

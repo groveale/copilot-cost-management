@@ -20,6 +20,28 @@ it("shows only login before authentication, never metadata or request fields", (
   expect(html).toContain("Sign in with Microsoft");
   expect(html).not.toContain("textarea"); expect(html).not.toContain("Owner approval inbox");
   expect(html).not.toContain("Request a new BU");
+  expect(html).not.toContain("Your current usage and balance");
+});
+it("mounts the personal balance only in the authenticated Request credits view", () => {
+  vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+  const config = parseConfig({
+    version: 1, tenantId: "10000000-0000-4000-8000-000000000001",
+    clientId: "10000000-0000-4000-8000-000000000002", serviceId: "cowork", budgets: [],
+  });
+  const auth = new DemoAuth(config);
+  vi.spyOn(auth, "account").mockReturnValue({
+    tenantId: config.tenantId, homeAccountId: "home", localAccountId: "10000000-0000-4000-8000-000000000003",
+    environment: "login.microsoftonline.com", username: "requester@example.test",
+  });
+  const request = renderToStaticMarkup(<HostedPortal config={config} auth={auth} initialView="request" />);
+  expect(request).toContain("Your current usage and balance");
+  expect(request).toContain("Loading your balance from Graph");
+  expect(request).toContain("not invoiced spend");
+  expect(request).not.toContain("Grant balance read access");
+  for (const initialView of ["owner", "admin"] as const) {
+    expect(renderToStaticMarkup(<HostedPortal config={config} auth={auth} initialView={initialView} />))
+      .not.toContain("Your current usage and balance");
+  }
 });
 it("renders the ordinary-user BU form with the exact 20K calculation and no administrator controls", () => {
   vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });

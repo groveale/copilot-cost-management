@@ -29,10 +29,13 @@ MSAL v5 redirect bridge and both HTML build entries are required.
   the signed-in identity. The view is reflected in `?view=admin`, `?view=owner`
   or the existing `?view=request`; browser back/forward restores the view.
   Switching views clears that view's draft and operation ID.
+- A **Dark mode / Light mode** button is available on the sign-in screen and
+  portal header. It switches the existing theme immediately and retains the
+  selected theme while navigating views or signing in/out on the current page.
 - **Admin** is shown only after the API verifies administrator access. Direct
   admin URLs do not grant access. **Setup requests** contains the review queue
   and the explicitly enabled private JSON importer. **Spending policies**
-  connects directly to delegated Graph and reads every spending-policy page,
+  automatically reads every spending-policy page directly through delegated Graph,
   not just configured budgets. The inventory is read-only. Business unit,
   cost centre, tier and owner mappings come from private metadata; missing
   mappings are explicitly **Unmapped**, never inferred from policy names or
@@ -44,11 +47,30 @@ MSAL v5 redirect bridge and both HTML build entries are required.
   and budget allocation. Its setup area allows a first or additional BU request
   and shows the caller's setup history, even when the main workspace has not yet
   been initialized. It does not expose administrator review or bootstrap tools.
-- **Request credits** contains only the employee's allowance request and history.
-  BU setup requests go to administrators; credit increases go to budget owners.
-- `?view=request` requests only OIDC and the application's delegated API scope.
+- **Request credits** automatically reads the signed-in user's current Graph
+  service balance and effective policy, alongside their allowance request and
+  history. It shows consumed/remaining credits, configured limits, effective
+  capacity, access status and source/fetch timestamps. These are current credit
+  readings, not invoiced spend or a verified billing-period history.
+  Missing balances are unavailable, not zero; policy-read errors preserve the
+  balance and remain visible. BU setup requests go to administrators; credit
+  increases go to budget owners.
+- Initial requester sign-in requests only OIDC and the application's delegated
+  API scope. The optional balance panel separately acquires only the existing
+  `CopilotCostManagement-UserData.Read.All` and
+  `CopilotCostManagement-Policy.Read.All` Graph read scopes, never the owner's
+  directory/assignment/write scopes. The demo assumes the signed-in account has
+  permission and any required directory role to read this data; it does not
+  establish ordinary-user self-service support or grant those privileges.
+  An explicit **Grant balance read access** button appears only for an MSAL
+  interaction-required error. Permission/network failures are shown without
+  simulated data, and do not block a server-routable request or erase its draft.
   The form submits business justification (20-2000 characters), permanent or
   temporary duration, and a client-generated operation ID. Routing is server-side.
+  The browser's reported effective policy is informational, not routing authority:
+  the API still uses the private requester index and current budget owners.
+  Policy-to-budget/owner metadata remains necessary; no owner is inferred from
+  a policy creator or Entra group owner.
 - Temporary requests capture the next UTC calendar month's first instant,
   exclusive. This is a **demo convention**, not a verified tenant billing period.
 - Requests and decisions are persisted in Azure Tables. Requesters see only
@@ -64,8 +86,15 @@ MSAL v5 redirect bridge and both HTML build entries are required.
   reloading/switching account intentionally clears the draft and operation ID.
 - Requester identity never comes from form fields, UPNs or browser JSON.
 
-Owners can separately connect Graph to inspect policy configuration, assigned
-groups, direct members and current user/service consumption. The existing eight
+Owners automatically load Graph policy configuration, assigned groups, direct
+members and current user/service consumption for their selected budget. Admin
+inventory and approved-budget allocation limits also load on entry. Reads use
+MSAL's cached/silently renewed Graph token; refresh does not force a popup.
+**Grant Graph access** appears only when silent authentication requires user
+interaction, and only its explicit action may open a consent/sign-in popup.
+API tokens are never reused as Graph tokens; requester balance reads use the
+separate read-only scope subset described above. Provisioning, recovery and allocation writes require their
+own explicit actions, not background effects. The existing eight
 operator-selected delegated scopes are unchanged. Preview Graph APIs are for
 evaluation, not supported production applications. Nested membership expansion,
 historical spend and reconciled billing are not provided.
@@ -80,8 +109,21 @@ API tokens are acquired separately and are never displayed or exported.
 All signed-in users can submit a BU name, cost centre, monthly USD budget and
 justification without Graph permissions. The API derives proposed ownership
 from the validated object ID. A separate configured administrator reviews
-cost-centre/cross-charge information, loads existing tier templates, then
-approves or rejects.
+cost-centre/cross-charge information and the fixed policy defaults, then approves
+or rejects. There is no existing-BU template picker or dependency on Legal.
+
+Fixed defaults live in private `metadata.onboardingDefaults` JSON:
+Standard has **10,000 credits per person** and Enhanced **25,000**, both
+`payAsYouGo` in the supplied seed example. These are per-person caps, not the
+pooled BU policy budgets. No limits/billing defaults are silently invented.
+Import the updated private seed through **Admin > Setup requests > Import private
+setup JSON** after deploying this version. Reimporting adds missing defaults
+without resetting requests or changing existing budgets/Graph policies.
+A configuration-only seed with empty `budgets` and `requesterIndex` is also
+supported. Different existing defaults conflict rather than being overwritten.
+New approvals verify the reviewed settings against private configuration and
+freeze them into the operation; older approved/recovering operations keep their
+recorded settings. Missing defaults block approval but not request/rejection.
 
 Approval provisions two security groups and two Cowork policies using the
 administrator's delegated Graph connection. Groups are owned by the requester

@@ -1,4 +1,4 @@
-import { PublicClientApplication, type AccountInfo } from "@azure/msal-browser";
+import { InteractionRequiredAuthError, PublicClientApplication, type AccountInfo } from "@azure/msal-browser";
 import type { DemoConfig } from "./config";
 
 export const scopes = [
@@ -13,6 +13,12 @@ export const scopes = [
 ].map((scope) => `https://graph.microsoft.com/${scope}`);
 
 export const requesterScopes = ["openid", "profile"];
+export const balanceScopes = [
+  "https://graph.microsoft.com/CopilotCostManagement-UserData.Read.All",
+  "https://graph.microsoft.com/CopilotCostManagement-Policy.Read.All",
+];
+export const isGraphInteractionRequired = (error: unknown): error is InteractionRequiredAuthError =>
+  error instanceof InteractionRequiredAuthError;
 
 export class DemoAuth {
   private readonly app: PublicClientApplication;
@@ -62,8 +68,26 @@ export class DemoAuth {
     return this.acquire([this.config.apiScope], account);
   }
 
+  async balanceToken(account = this.account()): Promise<string> {
+    return this.acquire(balanceScopes, account);
+  }
+
   async consentGraph(account: AccountInfo): Promise<void> {
-    const result = await this.app.acquireTokenPopup({ account, scopes });
+    return this.consent(scopes, account);
+  }
+
+  async consentBalance(account: AccountInfo): Promise<void> {
+    return this.consent(balanceScopes, account);
+  }
+
+  private async consent(requestScopes: string[], account: AccountInfo): Promise<void> {
+    try {
+      await this.acquire(requestScopes, account);
+      return;
+    } catch (error) {
+      if (!isGraphInteractionRequired(error)) throw error;
+    }
+    const result = await this.app.acquireTokenPopup({ account, scopes: requestScopes });
     if (result.account.homeAccountId !== account.homeAccountId || result.account.localAccountId !== account.localAccountId) {
       throw new Error("The account changed during Graph consent. Sign in again.");
     }

@@ -70,8 +70,17 @@ az bicep build --file infra\network.bicep --stdout
 4. After deployment outputs exist, add `https://<site>/auth.html` as a SPA
    redirect. Do not remove other valid callbacks or guess the hostname.
 
-The requester never needs the owner's eight Graph scopes. Current owners grant
-those separately when selecting **Connect / refresh Graph details**.
+Request submission needs no Graph permissions. The Request credits balance panel
+separately requests only the existing delegated
+`CopilotCostManagement-UserData.Read.All` and
+`CopilotCostManagement-Policy.Read.All` scopes, not the owner's eight-scope set.
+For this demo, use an account already permitted to read its balance and policy,
+including any required directory role. Ordinary-user self-read support is an
+assumption, not verified by this application; do not grant all employees broad
+roles just for the panel. Missing access is explicit and does not block request
+submission. Reads use silent acquisition; only **Grant balance read access** may
+open an interaction-required popup. Current owners acquire their separate
+eight-scope Graph token for owner operations.
 `scripts/configure-entra.ps1 -SpaClientId <id>` previews these operations;
 `-Apply` creates/reuses the API, preauthorizes only this SPA and preserves its
 existing Graph permissions. Rerun with `-SiteUrl <actual-origin> -Apply` after
@@ -252,7 +261,7 @@ code as the onboarding release.
    phase. Deploy using the existing protected application workflow only after
    the infrastructure and access changes are ready.
 4. Sign in as a configured administrator, open **Admin > Setup requests**, and use
-   **Import initial private Legal JSON**. Upload the ignored private seed from
+   **Import private setup JSON**. Upload the ignored private seed from
    the local machine. The browser needs no direct storage connectivity.
 5. Imports add budgets and create supplied requester mappings. Identical imports
    can be replayed; different existing budgets/mappings conflict instead of
@@ -263,6 +272,29 @@ code as the onboarding release.
 6. Rerun Infrastructure with bootstrap disabled after confirming the import.
    This disables `POST /api/v1/onboarding/bootstrap`; ongoing onboarding keeps
    its narrowly scoped storage writes.
+
+Fixed new-BU settings belong in private `metadata.onboardingDefaults`, not the
+public frontend bootstrap:
+
+```json
+"onboardingDefaults": {
+  "standard": { "perUserCredits": 10000, "billingMethods": "payAsYouGo" },
+  "enhanced": { "perUserCredits": 25000, "billingMethods": "payAsYouGo" }
+}
+```
+
+Deploy the updated API/frontend before importing this field. Reimporting the
+updated private seed adds missing defaults without replacing existing budgets,
+routing or requests, and does not modify existing Graph resources. Identical
+defaults replay safely; different existing defaults conflict. A seed containing
+only this configuration, the normal tenant/service/version fields, empty
+`budgets` and empty `requesterIndex` is valid, so no existing BU is required.
+If bootstrap was already disabled, temporarily enable it through the protected
+infrastructure workflow, import/verify, then disable it again. New approvals
+remain blocked until defaults are configured; do not substitute zero, unlimited
+or a different billing mode for missing configuration.
+After import, roll back only to an API version that understands
+`onboardingDefaults`; older strict metadata schemas reject the new field.
 
 For direct operator ARM deployment, supply the secure
 `onboardingAdminObjectIds` parameter every time and set `bootstrapEnabled`
@@ -279,9 +311,12 @@ private seed into the application.
   actual rated price or a purchase. Amounts are parsed as integer cents.
   **USD 20,000 = 2,000,000 credits**, initially **1,000,000 per policy**. A spare
   whole credit goes to Enhanced when the total is odd. The period is a UTC month.
-- The administrator selects an existing BU template and explicitly loads its
-  Standard/Enhanced per-user limits and billing methods using Graph. Unlimited
-  remains explicit, not an error fallback. The administrator confirms manual
+- The administrator reviews fixed Standard/Enhanced per-user limits and billing
+  methods from the private JSON; there is no BU-template selector or Graph
+  template read. The API rechecks the reviewed values against configuration and
+  freezes them into the approved operation. Later configuration changes do not
+  rewrite already-approved/recovering operations. Unlimited remains explicit,
+  not an error fallback. The administrator confirms manual
   cost-centre/cross-charge validation and enters an audit note before approval.
   There is no finance-system verification or automatic chargeback configuration.
 - **Approve and provision** creates two non-mail-enabled security groups owned
@@ -303,8 +338,11 @@ private seed into the application.
   repeated. Definitive Graph request rejection allows an explicit retry.
   Closing the browser pauses work; resume via the administrator queue after any
   outstanding lease expires. Partial resources are not automatically deleted.
-- Owners see the new budget in their workspace, then separately connect Graph
-  for live data. Their delegated permissions/roles are assumed, not inferred
+- Owners see the new budget in their workspace, with Graph data loaded
+  automatically using the cached/silently renewed delegated Graph token. Admin
+  inventory and allocation reads behave the same way. Interactive authorization
+  is offered only when silent acquisition requires it, never opened by an
+  automatic read. Graph writes remain explicit. Permissions/roles are assumed, not inferred
   from group ownership. Request status refreshes while the onboarding page is
   open; there is no notification delivery.
 - **Allocate the approved monthly budget** supports later tier changes, such as
@@ -406,6 +444,14 @@ minimal `/api/health` reports **process liveness only**, not storage readiness.
    outside the private network, verify storage data access remains blocked.
 2. Submit as a separate requester with no owner Graph permissions; reload and
    confirm persistence. Missing mappings/ownerless budgets must fail visibly.
+   Without balance-read access, verify that the balance error/explicit consent
+   action does not block submission or erase its draft. With an authorized demo
+   account, verify the balance uses that account's tenant-local object ID and
+   displays real consumed/remaining credits, limits, timestamps and its effective
+   policy. Zero, unlimited, unreported and unavailable must remain distinct.
+   Policy-read denial must not hide a successful balance. This reading does not
+   replace the server's requester-index/current-owner routing; no browser policy
+   ID becomes authoritative, and no balance failure is replaced by demo numbers.
 3. As owner, approve/reject; reload as requester to see the persisted decision.
    Verify unrelated users cannot see it, owner self-approval works, and competing
    decisions return conflicts rather than overwriting each other.

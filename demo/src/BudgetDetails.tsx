@@ -15,8 +15,8 @@ function JsonDetails({ title, value }: { title: string; value: unknown }) {
   return <details className="json-details"><summary>{title}</summary><pre>{JSON.stringify(value, null, 2)}</pre></details>;
 }
 
-function BalanceDetails({ row, fetchedAt, policyName, note }: {
-  row: Fields; fetchedAt: string; policyName: string; note: string | null;
+export function BalanceDetails({ row, fetchedAt, policyName, note, showLimits = false }: {
+  row: Fields; fetchedAt: string; policyName: string; note: string | null; showLimits?: boolean;
 }) {
   let source: string;
   try {
@@ -24,6 +24,11 @@ function BalanceDetails({ row, fetchedAt, policyName, note }: {
   } catch (error) {
     source = error instanceof Error ? error.message : String(error);
   }
+  const limits = <dl>
+    <dt>Configured period limit</dt><dd>{formatQuantity(row.configuredPeriodLimit)}</dd>
+    <dt>Configured per-user limit</dt><dd>{formatQuantity(row.configuredPerUserLimit)}</dd>
+    <dt>Effective capacity</dt><dd>{formatQuantity(row.effectiveCapacityQuantity)}</dd>
+  </dl>;
   return <>
     <dl className="balance-fields">
       <dt>Consumed</dt><dd className="quantity">{formatConsumed(row)}</dd>
@@ -35,12 +40,9 @@ function BalanceDetails({ row, fetchedAt, policyName, note }: {
       <dt>Fetched</dt><dd>{formatTime(fetchedAt)}</dd>
     </dl>
     {note && <p className="reading-note">{note}</p>}
-    <details className="balance-more"><summary>Balance limits and Graph response</summary>
-      <dl>
-        <dt>Configured period limit</dt><dd>{formatQuantity(row.configuredPeriodLimit)}</dd>
-        <dt>Configured per-user limit</dt><dd>{formatQuantity(row.configuredPerUserLimit)}</dd>
-        <dt>Effective capacity</dt><dd>{formatQuantity(row.effectiveCapacityQuantity)}</dd>
-      </dl>
+    {showLimits && limits}
+    <details className="balance-more"><summary>{showLimits ? "Full Graph balance response" : "Balance limits and Graph response"}</summary>
+      {!showLimits && limits}
       <pre>{JSON.stringify(row, null, 2)}</pre>
     </details>
   </>;

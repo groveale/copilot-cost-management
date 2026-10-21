@@ -10,7 +10,12 @@ export interface Budget {
   tiers: Record<"standard" | "enhanced", { policyId: string; groupId: string }>;
 }
 export interface Caller { tenantId: string; objectId: string; displayName?: string; contactHint?: string }
-export interface Metadata { version: 1; tenantId: string; serviceId: string; budgets: Budget[] }
+export interface PolicyTierDefaults {
+  perUserCredits: number | null;
+  billingMethods: "notSpecified" | "prepaidCredits" | "payAsYouGo" | "prepaidCredits,payAsYouGo";
+}
+export interface PolicyDefaults { standard: PolicyTierDefaults; enhanced: PolicyTierDefaults }
+export interface Metadata { version: 1; tenantId: string; serviceId: string; budgets: Budget[]; onboardingDefaults?: PolicyDefaults }
 export type GrantKind = "permanent" | "billingPeriod";
 export interface Submission { operationId: string; justification: string; grantKind: GrantKind }
 export interface RequestRecord extends Submission {

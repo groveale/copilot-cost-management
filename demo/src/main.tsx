@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { DemoAuth } from "./auth";
 import { loadConfig } from "./config";
 import { HostedPortal, portalView } from "./HostedPortal";
+import { ThemeToggle } from "./ThemeToggle";
 import "./styles.css";
 
 async function start() {
@@ -25,7 +26,7 @@ async function start() {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!disposed) app.render(<main className="login-shell"><section className="card login-card"><h1>Sign-in unavailable</h1><p className="error" role="alert">{message}</p><p>Contact the demo administrator to check the sign-in configuration, then reload.</p></section></main>);
+    if (!disposed) app.render(<main className="login-shell"><section className="card login-card"><ThemeToggle /><h1>Sign-in unavailable</h1><p className="error" role="alert">{message}</p><p>Contact the demo administrator to check the sign-in configuration, then reload.</p></section></main>);
   }
 }
 

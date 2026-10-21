@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { Budget, Metadata } from "../../api/src/contracts";
 import { RequestApi } from "./api";
-import { DemoAuth } from "./auth";
+import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import { guid, object, text, type TierName } from "./config";
 import { tierNames, type Resource } from "./details";
 import { GraphClient } from "./graph";
@@ -87,26 +87,37 @@ export function AdminPolicies({ api, auth, account }: { api: RequestApi; auth: D
   const [inventory, setInventory] = useState<PolicyInventory | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [needsConsent, setNeedsConsent] = useState(false);
   const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
-  async function load() {
+  useEffect(() => {
+    void load();
+    return () => controller.current?.abort();
+  }, [api, auth, account]);
+  async function load(interactive = false) {
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     setBusy(true); setError(""); setInventory(null);
     try {
-      await auth.consentGraph(account);
+      if (interactive) await auth.consentGraph(account);
+      await auth.token(account);
+      setNeedsConsent(false);
       const metadata = await api.onboardingSetup(current.signal);
       const result = await loadPolicyInventory(new GraphClient(() => auth.token(account)), metadata, current.signal);
       if (!current.signal.aborted) setInventory(result);
-    } catch (error) { if (!current.signal.aborted) setError(message(error)); }
+    } catch (error) {
+      if (!current.signal.aborted) { setNeedsConsent(isGraphInteractionRequired(error)); setError(message(error)); }
+    }
     finally { if (!current.signal.aborted) setBusy(false); }
   }
   return <section className="card"><h2>Spending policies and owners</h2>
     <p>Read-only inventory of all policies available through Graph, including policies with no portal mapping.
       Mapped owners are portal budget owners, not inferred from Entra group ownership.</p>
-    <button disabled={busy} onClick={() => void load()}>{busy ? "Loading policies..." : "Connect / refresh Graph policy list"}</button>
+    <div className="actions">
+      <button disabled={busy} onClick={() => void load()}>{busy ? "Loading policies..." : "Refresh policy list"}</button>
+      {needsConsent && <button disabled={busy} onClick={() => void load(true)}>Grant Graph access</button>}
+    </div>
     {busy && <p role="status">Loading all policy pages and resolving mapped owner names...</p>}
-    {!inventory && !busy && !error && <p className="muted">Connect Graph to load the policy inventory. No policy or owner mapping is changed.</p>}
+    <p className="small muted">Uses your cached Graph sign-in, renewing silently when possible. No policy or owner mapping is changed.</p>
     {error && <p className="error" role="alert">{error}</p>}
     {inventory && <PolicyInventoryTable inventory={inventory} />}
   </section>;

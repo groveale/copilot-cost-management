@@ -102,7 +102,7 @@ footer { margin-top: 24px; }
 .operator { text-align: right; }
 .operator p { margin: 8px 0 0; overflow-wrap: anywhere; }
 .operator .actions { justify-content: flex-end; }
-.budget-summary { margin: 24px 0; }
+.budget-summary, .personal-balance { margin: 24px 0; }
 .metadata-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
 .metadata-grid dt { margin-top: 0; }
 .tier-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 16px 0 24px; align-items: start; }

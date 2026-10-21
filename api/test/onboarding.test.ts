@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Caller, Metadata } from "../src/contracts.js";
+import type { Caller, Metadata, PolicyDefaults } from "../src/contracts.js";
 import { ApiError, metadataSchema } from "../src/model.js";
 import { checkAllocation, splitCredits, usdToCredits } from "../src/budget-math.js";
 import { buDecisionSchema, buSubmissionSchema, resourceKeys, type BuDecision, type BuSubmission, type OnboardingRecord, type OnboardingStore } from "../src/onboarding.js";
@@ -11,8 +11,12 @@ const admin: Caller = { tenantId: id(1), objectId: id(3) };
 const other: Caller = { tenantId: id(1), objectId: id(4) };
 const submission: BuSubmission = { operationId: id(5), name: "Finance", costCenter: "CC200",
   monthlyBudgetUsd: "20000", justification: "We need a governed business unit for this team." };
+const defaults: PolicyDefaults = {
+  standard: { perUserCredits: 10000, billingMethods: "payAsYouGo" },
+  enhanced: { perUserCredits: 25000, billingMethods: "payAsYouGo" },
+};
 const legal = metadataSchema.parse({
-  version: 1, tenantId: id(1), serviceId: "cowork", budgets: [{
+  version: 1, tenantId: id(1), serviceId: "cowork", onboardingDefaults: defaults, budgets: [{
     id: "legal", displayName: "Legal", businessArea: "Legal", costCenter: "CC100", owners: [admin.objectId],
     tiers: { standard: { policyId: id(11), groupId: id(12) }, enhanced: { policyId: id(13), groupId: id(14) } },
   }],
@@ -51,11 +55,10 @@ beforeEach(() => {
   store = new MemoryStore(); now = new Date("2026-10-21T09:00:00Z");
   service = new OnboardingService(store, [admin.objectId], () => now);
 });
-const approval = (etag: string): BuDecision => ({ status: "approved", etag, financeConfirmed: true,
-  reviewNote: "Cost centre and cross charging validated.",
-  standard: { perUserCredits: 5000, billingMethods: "prepaidCredits" },
-  enhanced: { perUserCredits: 50000, billingMethods: "prepaidCredits" } });
+const approval = (etag: string): Extract<BuDecision, { status: "approved" }> => ({ status: "approved", etag, financeConfirmed: true,
+  reviewNote: "Cost centre and cross charging validated.", ...defaults });
 async function approved() {
+  store.value ??= structuredClone({ ...legal, budgets: [] });
   const pending = await service.submit(owner, submission);
   return service.decide(admin, pending.id, approval(pending.etag));
 }
@@ -118,17 +121,19 @@ describe("onboarding authorization and persistence", () => {
   it("captures the approved ceiling and finance review without publishing a BU early", async () => {
     const record = await approved();
     expect(record).toMatchObject({ status: "provisioning", approvedCredits: 2_000_000,
-      financeConfirmed: true, decisionBy: admin.objectId, standard: { credits: 1_000_000 }, enhanced: { credits: 1_000_000 } });
-    expect(store.value).toBeNull();
+      financeConfirmed: true, decisionBy: admin.objectId,
+      standard: { credits: 1_000_000, ...defaults.standard }, enhanced: { credits: 1_000_000, ...defaults.enhanced } });
+    expect(store.value!.budgets).toEqual([]);
     await expect(service.decide(admin, record.id, approval(record.etag))).rejects.toMatchObject({ status: 409 });
     expect(buDecisionSchema.safeParse({ ...approval(record.etag), financeConfirmed: false }).success).toBe(false);
     expect(buDecisionSchema.safeParse(approval("*")).success).toBe(false);
   });
   it("protects competing decisions with ETags and records rejections", async () => {
+    store.value = structuredClone({ ...legal, budgets: [] });
     const record = await service.submit(owner, submission);
     await expect(service.decide(admin, record.id, approval("stale"))).rejects.toMatchObject({ status: 409 });
     const rejected = await service.decide(admin, record.id, { status: "rejected", etag: record.etag, reason: "Cost centre was not validated." });
-    expect(rejected.status).toBe("rejected"); expect(store.value).toBeNull();
+    expect(rejected.status).toBe("rejected"); expect(store.value!.budgets).toEqual([]);
   });
   it("uses exclusive expiring leases and requires recorded intent before accepting resource IDs", async () => {
     let record = await approved();
@@ -171,5 +176,62 @@ describe("onboarding authorization and persistence", () => {
     store.routes.set(owner.objectId, "already-mapped");
     await expect(service.bootstrap(admin, seed)).rejects.toMatchObject({ status: 409 });
     expect(store.routes.get(owner.objectId)).toBe("already-mapped");
+  });
+  it("requires private defaults for approval rather than guessing or accepting browser-selected settings", async () => {
+    const record = await service.submit(owner, submission);
+    await expect(service.decide(admin, record.id, approval(record.etag))).rejects.toMatchObject({
+      status: 409, code: "onboarding-defaults-required",
+    });
+    store.value = structuredClone({ ...legal, budgets: [] });
+    await expect(service.decide(admin, record.id, { ...approval(record.etag),
+      standard: { perUserCredits: 99999, billingMethods: "prepaidCredits" } })).rejects.toMatchObject({ status: 409 });
+    expect((await service.get(owner, record.id)).status).toBe("pending");
+  });
+  it("compares settings by value and freezes approved defaults for subsequent recovery", async () => {
+    store.value = structuredClone({ ...legal, budgets: [] });
+    const pending = await service.submit(owner, submission);
+    const record = await service.decide(admin, pending.id, { ...approval(pending.etag),
+      standard: { billingMethods: "payAsYouGo", perUserCredits: 10000 } });
+    store.value!.onboardingDefaults!.standard.perUserCredits = 123;
+    const saved = await service.get(admin, record.id);
+    expect(saved.standard.perUserCredits).toBe(10000);
+    expect(saved.enhanced.perUserCredits).toBe(25000);
+    delete store.value!.onboardingDefaults;
+    const claimed = await service.update(admin, record.id, { action: "claim", etag: record.etag });
+    expect(claimed.standard.perUserCredits).toBe(10000);
+  });
+  it("adds defaults to existing private metadata without resetting budgets, routing or requests", async () => {
+    const legacy: Metadata = structuredClone(legal);
+    delete legacy.onboardingDefaults;
+    store.value = structuredClone(legacy);
+    store.routes.set(owner.objectId, "legal");
+    const pending = await service.submit(owner, submission);
+    const seed = { metadata: { ...legal, budgets: [] }, requesterIndex: [] };
+    await service.bootstrap(admin, seed);
+    await service.bootstrap(admin, seed);
+    await service.bootstrap(admin, { metadata: legacy, requesterIndex: [] });
+    expect(store.value!.budgets).toEqual(legacy.budgets);
+    expect(store.value!.onboardingDefaults).toEqual(defaults);
+    expect(store.routes.get(owner.objectId)).toBe("legal");
+    expect(await service.get(owner, pending.id)).toEqual(pending);
+    const before = await store.metadata();
+    await expect(service.bootstrap(admin, { ...seed, metadata: { ...seed.metadata,
+      onboardingDefaults: { ...defaults, enhanced: { ...defaults.enhanced, perUserCredits: 1 } } } })).rejects.toMatchObject({ status: 409 });
+    expect(await store.metadata()).toEqual(before);
+  });
+  it("supports configuration-only private JSON without depending on Legal or any existing policies", async () => {
+    await service.bootstrap(admin, { metadata: { ...legal, budgets: [] }, requesterIndex: [] });
+    const record = await approved();
+    expect(record.standard.perUserCredits).toBe(10000);
+    expect(record.enhanced.perUserCredits).toBe(25000);
+    expect(store.value!.budgets).toEqual([]);
+  });
+  it("validates fixed private limits and billing methods", () => {
+    for (const perUserCredits of [-1, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(metadataSchema.safeParse({ ...legal, onboardingDefaults: { ...defaults,
+        standard: { ...defaults.standard, perUserCredits } } }).success).toBe(false);
+    }
+    expect(metadataSchema.safeParse({ ...legal, onboardingDefaults: { ...defaults,
+      enhanced: { ...defaults.enhanced, billingMethods: "invented" } } }).success).toBe(false);
   });
 });

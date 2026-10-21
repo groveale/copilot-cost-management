@@ -74,6 +74,19 @@ async function serviceRows(graph: GraphClient, path: string, signal: AbortSignal
   });
 }
 
+export async function loadUserBalance(graph: GraphClient, userId: string, serviceId: string, signal: AbortSignal): Promise<Fields | null> {
+  const id = guid(userId, "User object ID");
+  const rows = await serviceRows(graph, `${base}/userBalances/${id}/serviceBalances`, signal);
+  const matches = rows.filter((row) => row.serviceId === serviceId);
+  if (matches.length > 1) throw new Error(`Graph returned multiple ${serviceId} rows for the same user.`);
+  return matches[0] ?? null;
+}
+
+export async function loadSpendingPolicy(graph: GraphClient, policyId: unknown, signal: AbortSignal): Promise<Entity> {
+  const id = guid(policyId, "Spending policy ID");
+  return entity(await graph.get(`${base}/spendingPolicies/${id}`, signal), "Spending policy", id);
+}
+
 export async function loadBudgetDetails(
   budget: BudgetConfig,
   serviceId: string,
@@ -104,8 +117,7 @@ export async function loadBudgetDetails(
   for (const name of tierNames) {
     const tier = budget.tiers[name];
     updateTier(name, {
-      policy: await read(async () => entity(
-        await graph.get(`${base}/spendingPolicies/${tier.policyId}`, signal), "Spending policy", tier.policyId)),
+      policy: await read(() => loadSpendingPolicy(graph, tier.policyId, signal)),
     });
     updateTier(name, {
       services: await read(() => serviceRows(graph, `${base}/spendingPolicies/${tier.policyId}/serviceSettings`, signal)),
@@ -149,12 +161,7 @@ export async function loadBudgetDetails(
   snapshot = { ...snapshot, balances: Object.fromEntries([...users].map((id) => [id, loading()])) };
   publish();
   for (const id of users) {
-    const balance = await read(async () => {
-      const rows = await serviceRows(graph, `${base}/userBalances/${id}/serviceBalances`, signal);
-      const matches = rows.filter((row) => row.serviceId === serviceId);
-      if (matches.length > 1) throw new Error(`Graph returned multiple ${serviceId} rows for the same user.`);
-      return matches[0] ?? null;
-    });
+    const balance = await read(() => loadUserBalance(graph, id, serviceId, signal));
     snapshot = { ...snapshot, balances: { ...snapshot.balances, [id]: balance } };
     publish();
   }

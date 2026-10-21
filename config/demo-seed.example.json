@@ -3,6 +3,10 @@
     "version": 1,
     "tenantId": "11111111-1111-4111-8111-111111111111",
     "serviceId": "cowork",
+    "onboardingDefaults": {
+      "standard": { "perUserCredits": 10000, "billingMethods": "payAsYouGo" },
+      "enhanced": { "perUserCredits": 25000, "billingMethods": "payAsYouGo" }
+    },
     "budgets": [{
       "id": "example",
       "displayName": "Example budget",

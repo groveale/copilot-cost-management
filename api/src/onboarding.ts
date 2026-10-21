@@ -1,15 +1,11 @@
 import { z } from "zod";
 import type { Metadata, Page } from "./contracts.js";
-import { uuid } from "./model.js";
+import { policySettingsSchema as settingsSchema, uuid } from "./model.js";
 import { usdToCredits } from "./budget-math.js";
 
 export const resourceKeys = ["standardGroup", "enhancedGroup", "standardPolicy", "enhancedPolicy"] as const;
 export type ResourceKey = typeof resourceKeys[number];
 const credit = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const settingsSchema = z.object({
-  perUserCredits: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
-  billingMethods: z.enum(["notSpecified", "prepaidCredits", "payAsYouGo", "prepaidCredits,payAsYouGo"]),
-}).strict();
 export const buSubmissionSchema = z.object({
   operationId: uuid, name: z.string().trim().min(2).max(80),
   costCenter: z.string().trim().min(1).max(80),

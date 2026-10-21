@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
-import { DemoAuth } from "./auth";
+import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import type { BudgetConfig, DemoConfig, GrantKind } from "./config";
 import { RequestApi, type Context, type OnboardingCapabilities, type Page, type RequestRecord, type Submission } from "./api";
 import { GraphClient } from "./graph";
@@ -8,6 +8,8 @@ import { loadBudgetDetails, type BudgetSnapshot } from "./details";
 import { BudgetDetails } from "./BudgetDetails";
 import { BusinessUnitOnboarding, BudgetAllocation } from "./Onboarding";
 import { AdminPolicies } from "./AdminPolicies";
+import { PersonalBalance } from "./PersonalBalance";
+import { ThemeToggle } from "./ThemeToggle";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabel = (record: RequestRecord) => record.status === "approved" ? "Approved - manual fulfilment required" :
@@ -92,7 +94,7 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
     finally { setBusy(false); }
   }
   if (!account || busy) return <main className="login-shell"><section className="card login-card">
-    <span className="eyebrow">COPILOT BUDGET PORTAL</span>
+    <div className="section-heading"><span className="eyebrow">COPILOT BUDGET PORTAL</span><ThemeToggle /></div>
     <h1>{view === "request" ? "Request a higher allowance" : "Sign in to your budgets"}</h1>
     <p className="muted">Use your work account. Requests do not require Graph permissions.</p>
     <button disabled={busy} onClick={() => void authenticate()}>{busy ? "Completing sign-in / sign-out..." : "Sign in with Microsoft"}</button>
@@ -105,6 +107,7 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
       <p className="muted">{view === "admin" ? "Review setup requests and inspect spending-policy ownership." :
         view === "owner" ? "Your budgets, consumption and employee requests." : "Ask your policy owner for an Enhanced allowance."}</p></div>
       <div className="operator"><p>{account.username}</p><div className="actions">
+        <ThemeToggle />
         <button className="secondary" onClick={() => void authenticate()}>Switch account / renew sign-in</button>
         <button className="secondary" onClick={() => void authenticate(true)}>Sign out</button>
       </div></div></header>
@@ -127,6 +130,8 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
       </>}
     </>}
     {view !== "admin" && error && <p className="error" role="alert">{error}</p>}
+    {view === "request" && <PersonalBalance key={`${account.homeAccountId}:${account.localAccountId}:${refresh}`}
+      auth={auth} account={account} serviceId={config.serviceId} />}
     {view !== "admin" && !context && !error && <p role="status">Loading your authorized workspace...</p>}
     {view !== "admin" && context && <>
       <div className="notice">Credit-increase approval records a decision only. It does not change a policy, allowance or group membership.
@@ -176,7 +181,8 @@ function SubmissionForm({ api, context }: { api: RequestApi; context: Context })
   return <>
     <section className="card"><h2>Business need</h2>
       <p>{context.route.message}{context.route.budgetName && ` Budget: ${context.route.budgetName}.`}</p>
-      <p className="small muted">Routing uses your verified tenant/user ID and the private requester index. No policy selection or balance API access is needed.</p>
+      <p className="small muted">Routing uses your verified tenant/user ID and the private requester index, not the policy reported by your browser.
+        Balance access is optional and does not block this form.</p>
       <form className="request-form" onSubmit={(event) => void submit(event)}>
         <label htmlFor="justification">Business justification (20-2000 characters)</label>
         <textarea id="justification" minLength={20} maxLength={2000} required rows={6} value={justification}
@@ -264,29 +270,47 @@ function OwnerGraph({ budgets, serviceId, auth, account, api }: {
   const [snapshot, setSnapshot] = useState<BudgetSnapshot | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [needsConsent, setNeedsConsent] = useState(false);
+  const [graphReady, setGraphReady] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const budget = budgets.find((b) => b.id === budgetId);
-  useEffect(() => { setSnapshot(null); controller.current?.abort(); }, [budget]);
-  useEffect(() => () => controller.current?.abort(), []);
-  async function load() {
+  useEffect(() => {
+    void load();
+    return () => controller.current?.abort();
+  }, [budget, auth, account]);
+  async function load(interactive = false) {
     if (!budget) return;
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     setBusy(true); setError(""); setSnapshot(null);
     try {
-      await auth.consentGraph(account);
+      if (interactive) await auth.consentGraph(account);
+      await auth.token(account);
+      setNeedsConsent(false);
+      setGraphReady(true);
       if (current.signal.aborted) return;
-      await loadBudgetDetails(budget, serviceId, new GraphClient(() => auth.token(account)), current.signal,
+      await loadBudgetDetails(budget, serviceId, new GraphClient(() => auth.token(account).catch((error: unknown) => {
+        if (!current.signal.aborted) setNeedsConsent(isGraphInteractionRequired(error));
+        throw error;
+      })), current.signal,
         (next) => { if (!current.signal.aborted) setSnapshot(next); });
-    } catch (error) { if (!current.signal.aborted) setError(message(error)); }
+    } catch (error) {
+      if (!current.signal.aborted) {
+        setNeedsConsent(isGraphInteractionRequired(error));
+        setError(message(error));
+      }
+    }
     finally { if (!current.signal.aborted) setBusy(false); }
   }
   return <><section className="card"><h2>Live Graph details</h2>
     <p className="muted">Only your server-authorized budgets are available. Graph uses a separate delegated token and the existing eight owner permissions.</p>
-    <label>Budget <select value={budgetId} disabled={busy} onChange={(e) => setBudgetId(e.target.value)}>
+    <label>Budget <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>
       {budgets.map((b) => <option key={b.id} value={b.id}>{b.displayName}</option>)}</select></label>
-    <button disabled={busy || !budget} onClick={() => void load()}>{busy ? "Loading Graph..." : "Connect / refresh Graph details"}</button>
+    <div className="actions">
+      <button disabled={busy || !budget} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh Graph details"}</button>
+      {needsConsent && <button disabled={busy} onClick={() => void load(true)}>Grant Graph access</button>}
+    </div>
     {error && <p className="error" role="alert">{error}</p>}
-  </section>{budget?.approvedCreditCeiling && <BudgetAllocation key={budget.id} budget={budget} api={api} auth={auth} account={account} onApplied={() => setSnapshot(null)} />}
+  </section>{graphReady && budget?.approvedCreditCeiling && <BudgetAllocation key={budget.id} budget={budget} api={api} auth={auth} account={account} onApplied={() => void load()} />}
     {budget && snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId} />}</>;
 }

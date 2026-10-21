@@ -5,10 +5,15 @@ export const uuid = z.uuid().transform((value) => value.toLowerCase()).refine(
   (value) => value !== "00000000-0000-0000-0000-000000000000", "A non-zero UUID is required.",
 );
 const tier = z.object({ policyId: uuid, groupId: uuid }).strict();
+export const policySettingsSchema = z.object({
+  perUserCredits: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+  billingMethods: z.enum(["notSpecified", "prepaidCredits", "payAsYouGo", "prepaidCredits,payAsYouGo"]),
+}).strict();
 export const metadataSchema = z.object({
   version: z.literal(1),
   tenantId: uuid,
   serviceId: z.string().trim().min(1),
+  onboardingDefaults: z.object({ standard: policySettingsSchema, enhanced: policySettingsSchema }).strict().optional(),
   budgets: z.array(z.object({
     id: z.string().regex(/^[a-z0-9-]{1,64}$/),
     displayName: z.string().trim().min(1),

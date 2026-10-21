@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
-import type { Budget, Page } from "../../api/src/contracts";
-import type { BuSubmission, OnboardingRecord, TierSettings } from "../../api/src/onboarding";
+import type { Budget, Page, PolicyDefaults } from "../../api/src/contracts";
+import type { BuSubmission, OnboardingRecord } from "../../api/src/onboarding";
 import { checkAllocation, splitCredits, usdToCredits } from "../../api/src/budget-math";
 import { RequestApi, type OnboardingCapabilities } from "./api";
-import { DemoAuth } from "./auth";
+import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import { GraphClient } from "./graph";
-import { runProvisioning, templateSettings, readAllocation } from "./provisioning";
+import { runProvisioning, readAllocation } from "./provisioning";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const format = (value: number) => value.toLocaleString("en-US");
@@ -20,7 +20,7 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
   onPublished: () => void; mode: "owner" | "admin"; capabilities: OnboardingCapabilities | null;
 }) {
   const admin = mode === "admin" && capabilities?.isAdmin === true;
-  const [templates, setTemplates] = useState<Budget[]>([]);
+  const [defaults, setDefaults] = useState<PolicyDefaults | null>(null);
   const [page, setPage] = useState<Page<OnboardingRecord>>({ items: [] });
   const [refresh, setRefresh] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -37,7 +37,7 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
     void (async () => {
       const result = await api.onboardingList(current.signal, admin);
       const metadata = admin ? await api.onboardingSetup(current.signal) : null;
-      if (!current.signal.aborted) { setPage(result); setTemplates(metadata?.budgets ?? []); }
+      if (!current.signal.aborted) { setPage(result); setDefaults(metadata?.onboardingDefaults ?? null); }
     })().catch((error: unknown) => { if (!current.signal.aborted) setError(message(error)); });
     return () => current.abort();
   }, [api, mode, admin, refresh]);
@@ -102,7 +102,8 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
     </section>}
     {admin && <section className="card"><h2>Onboarding administration</h2>
       <p>Validate cross-charging and the cost centre outside this demo. These fields are metadata, not a finance-system integration.</p>
-      {capabilities?.bootstrapEnabled && <label>Import initial private Legal JSON
+      <p>New BUs always receive Standard and Enhanced policies. Per-person caps and billing methods come from fixed private JSON, not another BU.</p>
+      {capabilities?.bootstrapEnabled && <label>Import private setup JSON
         <input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => {
           const file = event.target.files?.[0];
           if (!file) return;
@@ -126,7 +127,7 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
       {!page.items.length && <p>No onboarding requests loaded.</p>}
     </section>
     {page.items.map((record) => <OnboardingCard key={record.id} record={record} admin={admin}
-      templates={templates} api={api} auth={auth} account={account} busy={busy} perform={perform} progress={progress} onPublished={onPublished} />)}
+      defaults={defaults} api={api} auth={auth} account={account} busy={busy} perform={perform} progress={progress} onPublished={onPublished} />)}
     {page.cursor && <button disabled={busy} onClick={() => void perform(async (signal) => {
       const next = await api.onboardingList(signal, admin, page.cursor);
       if (!signal.aborted) setPage({ ...next, items: [...page.items, ...next.items] });
@@ -134,15 +135,24 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
   </section>;
 }
 
-function OnboardingCard({ record, admin, templates, api, auth, account, busy, perform, progress, onPublished }: Connection & {
-  record: OnboardingRecord; admin: boolean; templates: Budget[]; busy: boolean;
+function OnboardingCard({ record, admin, defaults, api, auth, account, busy, perform, progress, onPublished }: Connection & {
+  record: OnboardingRecord; admin: boolean; defaults: PolicyDefaults | null; busy: boolean;
   perform: (action: (signal: AbortSignal) => Promise<void>) => Promise<void>;
   progress: (record: OnboardingRecord) => void; onPublished: () => void;
 }) {
-  const [templateId, setTemplateId] = useState(templates.find((budget) => /legal/i.test(budget.displayName))?.id ?? templates[0]?.id ?? "");
-  const [settings, setSettings] = useState<{ standard: TierSettings; enhanced: TierSettings } | null>(null);
+  const [needsConsent, setNeedsConsent] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [note, setNote] = useState("");
+  async function graphToken() {
+    try {
+      const token = await auth.token(account);
+      setNeedsConsent(false);
+      return token;
+    } catch (error) {
+      setNeedsConsent(isGraphInteractionRequired(error));
+      throw error;
+    }
+  }
   return <article className="card"><h3>{record.name}: {statusLabel(record)}</h3>
     <dl><dt>Cost centre</dt><dd>{record.costCenter}</dd><dt>Requested monthly USD</dt><dd>${record.monthlyBudgetUsd}</dd>
       <dt>Proposed owner</dt><dd>{record.displayName ?? record.requesterId} {record.contactHint && `(${record.contactHint})`}</dd>
@@ -155,32 +165,23 @@ function OnboardingCard({ record, admin, templates, api, auth, account, busy, pe
     {record.status === "provisioning" && <p>Created resources: {Object.keys(record.resources).length}/4.
       Incomplete operations retain their progress. No new ownership is published until verification completes.</p>}
     {admin && record.status === "pending" && <div className="request-form">
-      <label>Existing policy template <select disabled={busy} value={templateId} onChange={(event) => { setTemplateId(event.target.value); setSettings(null); }}>
-        <option value="">Select an existing BU</option>{templates.map((budget) => <option key={budget.id} value={budget.id}>{budget.displayName}</option>)}
-      </select></label>
-      <button className="secondary" disabled={busy || !templateId} onClick={() => void perform(async (signal) => {
-        const source = templates.find((budget) => budget.id === templateId);
-        if (!source) throw new Error("Import the initial Legal seed before selecting policy defaults.");
-        await auth.consentGraph(account);
-        const graph = new GraphClient(() => auth.token(account));
-        const standard = templateSettings(await graph.get(`/beta/copilot/costManagement/spendingPolicies/${source.tiers.standard.policyId}`, signal));
-        const enhanced = templateSettings(await graph.get(`/beta/copilot/costManagement/spendingPolicies/${source.tiers.enhanced.policyId}`, signal));
-        if (!signal.aborted) setSettings({ standard, enhanced });
-      })}>Connect Graph / load per-user and billing defaults</button>
-      {settings && <p>Standard per-user: {settings.standard.perUserCredits ?? "Unlimited"} credits, {settings.standard.billingMethods}.
-        Enhanced per-user: {settings.enhanced.perUserCredits ?? "Unlimited"} credits, {settings.enhanced.billingMethods}.
-        The existing template policies will not be changed.</p>}
+      {defaults ? <p>Fixed per-person defaults: Standard {defaults.standard.perUserCredits === null ? "Unlimited" : format(defaults.standard.perUserCredits)} credits,
+        {" "}{defaults.standard.billingMethods}; Enhanced {defaults.enhanced.perUserCredits === null ? "Unlimited" : format(defaults.enhanced.perUserCredits)} credits,
+        {" "}{defaults.enhanced.billingMethods}. Existing BU policies are not changed.</p> :
+        <p className="notice">Fixed defaults are not loaded. Refresh setup requests or import private setup JSON before approving.</p>}
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={(event) => setConfirmed(event.target.checked)} />
         I have validated this cost centre and cross-charging arrangement.</label>
       <label>Validation note / rejection reason (10-1000 characters)
         <textarea value={note} disabled={busy} maxLength={1000} onChange={(event) => setNote(event.target.value)} /></label>
       <div className="actions">
-        <button disabled={busy || !confirmed || note.trim().length < 10 || !settings} onClick={() => void perform(async (signal) => {
-          if (!settings) throw new Error("Review the policy defaults before approving.");
+        <button disabled={busy || !confirmed || note.trim().length < 10 || !defaults} onClick={() => void perform(async (signal) => {
+          if (!defaults) throw new Error("Configure the fixed private policy defaults before approving.");
+          await graphToken();
+          signal.throwIfAborted();
           const approved = await api.onboardingDecide(record.id, { status: "approved", etag: record.etag,
-            financeConfirmed: true, reviewNote: note.trim(), ...settings }, signal);
+            financeConfirmed: true, reviewNote: note.trim(), ...defaults }, signal);
           progress(approved);
-          const saved = await runProvisioning(api, new GraphClient(() => auth.token(account)), approved, signal, progress);
+          const saved = await runProvisioning(api, new GraphClient(graphToken), approved, signal, progress);
           if (!signal.aborted && saved.status === "completed") onPublished();
         })}>Approve and provision</button>
         <button className="secondary" disabled={busy || note.trim().length < 10} onClick={() => void perform(async (signal) => {
@@ -189,10 +190,14 @@ function OnboardingCard({ record, admin, templates, api, auth, account, busy, pe
       </div>
     </div>}
     {admin && record.status === "provisioning" && <button disabled={busy} onClick={() => void perform(async (signal) => {
-      await auth.consentGraph(account);
-      const saved = await runProvisioning(api, new GraphClient(() => auth.token(account)), record, signal, progress);
+      await graphToken();
+      const saved = await runProvisioning(api, new GraphClient(graphToken), record, signal, progress);
       if (!signal.aborted && saved.status === "completed") onPublished();
-    })}>Connect Graph / resume provisioning</button>}
+    })}>Resume provisioning</button>}
+    {admin && needsConsent && <button disabled={busy} onClick={() => void perform(async () => {
+      await auth.consentGraph(account);
+      await graphToken();
+    })}>Grant Graph access</button>}
   </article>;
 }
 
@@ -202,24 +207,38 @@ export function BudgetAllocation({ budget, api, auth, account, onApplied }: Conn
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [needsConsent, setNeedsConsent] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const operation = useRef<{ signature: string; id: string } | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => {
+    if (!budget.approvedCreditCeiling) return;
+    void perform(loadLimits);
+    return () => controller.current?.abort();
+  }, [budget, auth, account]);
   if (!budget.approvedCreditCeiling) return null;
-  async function perform(action: (graph: GraphClient, signal: AbortSignal) => Promise<void>) {
+  async function perform(action: (graph: GraphClient, signal: AbortSignal) => Promise<void>, interactive = false) {
+    controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     setBusy(true); setError(""); setNotice("");
     try {
-      await auth.consentGraph(account);
+      if (interactive) await auth.consentGraph(account);
+      await auth.token(account);
+      setNeedsConsent(false);
       await action(new GraphClient(() => auth.token(account)), current.signal);
-    } catch (error) { if (!current.signal.aborted) setError(message(error)); }
+    } catch (error) {
+      if (!current.signal.aborted) { setNeedsConsent(isGraphInteractionRequired(error)); setError(message(error)); }
+    }
     finally { if (!current.signal.aborted) setBusy(false); }
+  }
+  async function loadLimits(graph: GraphClient, signal: AbortSignal) {
+    const values = await readAllocation(graph, budget, signal);
+    if (!signal.aborted) { setStandard(String(values.standard)); setEnhanced(String(values.enhanced)); }
   }
   async function run(graph: GraphClient, record: OnboardingRecord, signal: AbortSignal) {
     const saved = await runProvisioning(api, graph, record, signal, () => undefined);
     if (!signal.aborted && saved.status === "completed") {
       setStandard(String(saved.standard.credits)); setEnhanced(String(saved.enhanced.credits));
-      setNotice("Allocation verified in Graph. Refresh live details to load the updated policy snapshot.");
+      setNotice("Allocation verified in Graph. Live details are refreshing.");
       operation.current = null; onApplied();
     }
   }
@@ -230,10 +249,7 @@ export function BudgetAllocation({ budget, api, auth, account, onApplied }: Conn
       <label>Standard credits <input type="number" min="0" step="1" value={standard} onChange={(event) => setStandard(event.target.value)} /></label>
       <label>Enhanced credits <input type="number" min="0" step="1" value={enhanced} onChange={(event) => setEnhanced(event.target.value)} /></label>
       <div className="actions">
-        <button className="secondary" onClick={() => void perform(async (graph, signal) => {
-          const values = await readAllocation(graph, budget, signal);
-          if (!signal.aborted) { setStandard(String(values.standard)); setEnhanced(String(values.enhanced)); }
-        })}>Load actual Graph limits</button>
+        <button className="secondary" onClick={() => void perform(loadLimits)}>Refresh actual Graph limits</button>
         <button disabled={!standard || !enhanced} onClick={() => void perform(async (graph, signal) => {
           checkAllocation(Number(standard), Number(enhanced), budget.approvedCreditCeiling!);
           const signature = `${standard}:${enhanced}`;
@@ -249,6 +265,9 @@ export function BudgetAllocation({ budget, api, auth, account, onApplied }: Conn
         })}>Resume saved allocation</button>
       </div>
     </fieldset></div>
+    {needsConsent && <button disabled={busy} onClick={() => void perform(async (graph, signal) => {
+      if (!standard && !enhanced) await loadLimits(graph, signal);
+    }, true)}>Grant Graph access</button>}
     {busy && <p role="status">Working with Graph. Keep this page open.</p>}
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
