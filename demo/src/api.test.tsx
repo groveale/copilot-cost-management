@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { RequestApi } from "./api";
-import { HostedPortal } from "./HostedPortal";
+import { HostedPortal, PortalNavigation, portalView } from "./HostedPortal";
 import { DemoAuth } from "./auth";
 import { parseConfig } from "./config";
 import { BusinessUnitOnboarding } from "./Onboarding";
@@ -16,7 +16,7 @@ it("shows only login before authentication, never metadata or request fields", (
     version: 1, tenantId: "10000000-0000-4000-8000-000000000001",
     clientId: "10000000-0000-4000-8000-000000000002", serviceId: "cowork", budgets: [],
   });
-  const html = renderToStaticMarkup(<HostedPortal config={config} auth={new DemoAuth(config)} requestPage />);
+  const html = renderToStaticMarkup(<HostedPortal config={config} auth={new DemoAuth(config)} initialView="request" />);
   expect(html).toContain("Sign in with Microsoft");
   expect(html).not.toContain("textarea"); expect(html).not.toContain("Owner approval inbox");
   expect(html).not.toContain("Request a new BU");
@@ -28,12 +28,48 @@ it("renders the ordinary-user BU form with the exact 20K calculation and no admi
   const account = { tenantId: config.tenantId, homeAccountId: "home", localAccountId: "local",
     environment: "login.microsoftonline.com", username: "owner@example.test", name: "Example owner" };
   const html = renderToStaticMarkup(<BusinessUnitOnboarding api={new RequestApi("https://example.test", async () => "token")}
-    auth={new DemoAuth(config)} account={account} onPublished={() => undefined} />);
+    auth={new DemoAuth(config)} account={account} mode="owner" capabilities={null} onPublished={() => undefined} />);
   expect(html).toContain("Request a new business unit");
   expect(html).toContain("2,000,000 credits/month: 1,000,000 Standard + 1,000,000 Enhanced");
   expect(html).toContain("owner@example.test");
   expect(html).not.toContain("Onboarding administration");
   expect(html).not.toContain('name="owners"');
+});
+it("keeps legacy request URLs and defaults unknown views to the owner workspace", () => {
+  expect(portalView("?view=request")).toBe("request");
+  expect(portalView("?view=admin")).toBe("admin");
+  expect(portalView("?view=owner")).toBe("owner");
+  expect(portalView("?view=unrecognized")).toBe("owner");
+  expect(portalView("")).toBe("owner");
+});
+it("shows three view switches only to verified administrators", () => {
+  const admin = renderToStaticMarkup(<PortalNavigation view="admin" isAdmin onSelect={() => undefined} />);
+  expect(admin).toContain('aria-label="Portal views"');
+  for (const label of ["Admin", "Policy owner", "Request credits"]) expect(admin).toContain(label);
+  expect(admin).toContain('aria-pressed="true">Admin');
+  const ordinary = renderToStaticMarkup(<PortalNavigation view="owner" isAdmin={false} onSelect={() => undefined} />);
+  expect(ordinary).not.toContain(">Admin<");
+  expect(ordinary).toContain("Policy owner");
+  expect(ordinary).toContain("Request credits");
+});
+it.each([
+  { mode: "admin" as const, isAdmin: true, bootstrapEnabled: true, adminTools: true },
+  { mode: "admin" as const, isAdmin: true, bootstrapEnabled: false, adminTools: true },
+  { mode: "owner" as const, isAdmin: true, bootstrapEnabled: true, adminTools: false },
+  { mode: "admin" as const, isAdmin: false, bootstrapEnabled: true, adminTools: false },
+])("separates $mode tools with admin=$isAdmin and bootstrap=$bootstrapEnabled", ({ mode, isAdmin, bootstrapEnabled, adminTools }) => {
+  vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+  const config = parseConfig({ version: 1, tenantId: "10000000-0000-4000-8000-000000000001",
+    clientId: "10000000-0000-4000-8000-000000000002", serviceId: "cowork", budgets: [] });
+  const account = { tenantId: config.tenantId, homeAccountId: "home", localAccountId: "local",
+    environment: "login.microsoftonline.com", username: "owner@example.test" };
+  const html = renderToStaticMarkup(<BusinessUnitOnboarding api={new RequestApi("https://example.test", async () => "token")}
+    auth={new DemoAuth(config)} account={account} mode={mode} capabilities={{ isAdmin, bootstrapEnabled, objectId: "owner" }}
+    onPublished={() => undefined} />);
+  expect(html.includes("Administrator onboarding queue")).toBe(adminTools);
+  expect(html.includes('type="file"')).toBe(adminTools && bootstrapEnabled);
+  expect(html.includes('name="costCenter"')).toBe(mode === "owner");
+  if (mode === "admin" && !isAdmin) expect(html).toContain("Administrator access is required");
 });
 it("uses only the API bearer token, includes an abort signal, and transmits the stable operation ID", async () => {
   const transport = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "saved" })));

@@ -16,11 +16,12 @@ const statusLabel = (record: OnboardingRecord) => ({
 })[record.status];
 type Connection = { api: RequestApi; auth: DemoAuth; account: AccountInfo };
 
-export function BusinessUnitOnboarding({ api, auth, account, onPublished }: Connection & { onPublished: () => void }) {
-  const [capabilities, setCapabilities] = useState<OnboardingCapabilities | null>(null);
+export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, capabilities }: Connection & {
+  onPublished: () => void; mode: "owner" | "admin"; capabilities: OnboardingCapabilities | null;
+}) {
+  const admin = mode === "admin" && capabilities?.isAdmin === true;
   const [templates, setTemplates] = useState<Budget[]>([]);
   const [page, setPage] = useState<Page<OnboardingRecord>>({ items: [] });
-  const [inbox, setInbox] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -31,15 +32,15 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished }: Conn
   const published = useRef(new Set<string>());
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
+    if (mode === "admin" && !admin) return;
     const current = new AbortController();
     void (async () => {
-      const caps = await api.onboardingCapabilities(current.signal);
-      const result = await api.onboardingList(current.signal, inbox && caps.isAdmin);
-      const metadata = caps.isAdmin ? await api.onboardingSetup(current.signal) : null;
-      if (!current.signal.aborted) { setCapabilities(caps); setPage(result); setTemplates(metadata?.budgets ?? []); }
+      const result = await api.onboardingList(current.signal, admin);
+      const metadata = admin ? await api.onboardingSetup(current.signal) : null;
+      if (!current.signal.aborted) { setPage(result); setTemplates(metadata?.budgets ?? []); }
     })().catch((error: unknown) => { if (!current.signal.aborted) setError(message(error)); });
     return () => current.abort();
-  }, [api, inbox, refresh]);
+  }, [api, mode, admin, refresh]);
   useEffect(() => {
     for (const item of page.items) {
       if (item.status === "completed" && !published.current.has(item.id)) {
@@ -79,8 +80,9 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished }: Conn
     const total = usdToCredits(usd); const split = splitCredits(total);
     calculation = `${format(total)} credits/month: ${format(split.standard)} Standard + ${format(split.enhanced)} Enhanced.`;
   } catch (error) { calculation = message(error); }
-  return <section>
-    <section className="card"><h2>Request a new business unit</h2>
+  if (mode === "admin" && !admin) return <p className="error" role="alert">Administrator access is required.</p>;
+  return <section className="onboarding-workspace">
+    {mode === "owner" && <section className="card"><h2>Request a new business unit</h2>
       <p>Your proposed ownership comes from your signed-in identity. Approval does not grant you directory roles.</p>
       <p>Proposed owner: {capabilities?.displayName ?? account.name ?? account.username}.
         {" "}Contact: {capabilities?.contactHint ?? account.username ?? "Not supplied by sign-in"}.</p>
@@ -97,12 +99,10 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished }: Conn
           <button>Submit BU request</button>
         </fieldset>
       </form>
-    </section>
-    {capabilities?.isAdmin && <section className="card"><h2>Onboarding administration</h2>
+    </section>}
+    {admin && <section className="card"><h2>Onboarding administration</h2>
       <p>Validate cross-charging and the cost centre outside this demo. These fields are metadata, not a finance-system integration.</p>
-      <button className="secondary" disabled={busy} onClick={() => { setError(""); setInbox((value) => !value); }}>
-        {inbox ? "Show my onboarding requests" : "Show administrator onboarding queue"}</button>
-      {capabilities.bootstrapEnabled && <label>Import initial private Legal JSON
+      {capabilities?.bootstrapEnabled && <label>Import initial private Legal JSON
         <input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => {
           const file = event.target.files?.[0];
           if (!file) return;
@@ -121,14 +121,14 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished }: Conn
     </section>}
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
-    <section className="card"><h2>{inbox ? "Administrator onboarding queue" : "Your BU requests"}</h2>
+    <section className="card"><h2>{admin ? "Administrator onboarding queue" : "Your BU requests"}</h2>
       <button className="secondary" disabled={busy} onClick={() => { setError(""); setRefresh((value) => value + 1); }}>Refresh onboarding</button>
       {!page.items.length && <p>No onboarding requests loaded.</p>}
     </section>
-    {page.items.map((record) => <OnboardingCard key={record.id} record={record} admin={!!capabilities?.isAdmin && inbox}
+    {page.items.map((record) => <OnboardingCard key={record.id} record={record} admin={admin}
       templates={templates} api={api} auth={auth} account={account} busy={busy} perform={perform} progress={progress} onPublished={onPublished} />)}
     {page.cursor && <button disabled={busy} onClick={() => void perform(async (signal) => {
-      const next = await api.onboardingList(signal, inbox, page.cursor);
+      const next = await api.onboardingList(signal, admin, page.cursor);
       if (!signal.aborted) setPage({ ...next, items: [...page.items, ...next.items] });
     }, false)}>Load more onboarding requests</button>}
   </section>;

@@ -1,39 +1,88 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import { DemoAuth } from "./auth";
 import type { BudgetConfig, DemoConfig, GrantKind } from "./config";
-import { RequestApi, type Context, type Page, type RequestRecord, type Submission } from "./api";
+import { RequestApi, type Context, type OnboardingCapabilities, type Page, type RequestRecord, type Submission } from "./api";
 import { GraphClient } from "./graph";
 import { loadBudgetDetails, type BudgetSnapshot } from "./details";
 import { BudgetDetails } from "./BudgetDetails";
 import { BusinessUnitOnboarding, BudgetAllocation } from "./Onboarding";
+import { AdminPolicies } from "./AdminPolicies";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabel = (record: RequestRecord) => record.status === "approved" ? "Approved - manual fulfilment required" :
   record.status === "rejected" ? "Rejected" : record.expiresAt && Date.parse(record.expiresAt) <= Date.now() ? "Expired / not approved" : "Pending owner decision";
 
-export function HostedPortal({ config, auth, requestPage }: { config: DemoConfig; auth: DemoAuth; requestPage: boolean }) {
+export type PortalView = "admin" | "owner" | "request";
+export function portalView(search: string): PortalView {
+  const view = new URLSearchParams(search).get("view");
+  return view === "admin" || view === "request" ? view : "owner";
+}
+const viewNames: Record<PortalView, string> = { admin: "Admin", owner: "Policy owner", request: "Request credits" };
+
+export function PortalNavigation({ view, isAdmin, onSelect }: {
+  view: PortalView; isAdmin: boolean; onSelect: (view: PortalView) => void;
+}) {
+  const views: PortalView[] = isAdmin ? ["admin", "owner", "request"] : ["owner", "request"];
+  return <nav className="actions portal-navigation" aria-label="Portal views">
+    {views.map((item) => <button key={item} className={view === item ? "" : "secondary"} aria-pressed={view === item}
+      onClick={() => onSelect(item)}>{viewNames[item]}</button>)}
+  </nav>;
+}
+
+export function HostedPortal({ config, auth, initialView }: { config: DemoConfig; auth: DemoAuth; initialView: PortalView }) {
   const [account, setAccount] = useState(auth.account());
+  const [view, setView] = useState(initialView);
+  const [adminSection, setAdminSection] = useState<"requests" | "policies">("requests");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [capabilities, setCapabilities] = useState<OnboardingCapabilities | null>(null);
+  const [capabilityError, setCapabilityError] = useState("");
   const [context, setContext] = useState<Context | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const api = useMemo(() => new RequestApi(config.apiBaseUrl ?? "", () => auth.apiToken(account)), [auth, config.apiBaseUrl, account]);
+  const onPublished = useCallback(() => setRefresh((value) => value + 1), []);
+  useEffect(() => {
+    const onPopState = () => setView(portalView(window.location.search));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  useEffect(() => { document.title = `Copilot Budget Portal | ${viewNames[view]}`; }, [view]);
+  useEffect(() => {
+    if (!account || busy) return;
+    const controller = new AbortController();
+    setCapabilityError("");
+    void api.onboardingCapabilities(controller.signal).then((value) => {
+      if (!controller.signal.aborted) setCapabilities(value);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) { setCapabilities(null); setCapabilityError(message(error)); }
+    });
+    return () => controller.abort();
+  }, [account, api, busy, refresh]);
   useEffect(() => {
     setContext(null);
     if (!account || busy) return;
+    setError("");
+    if (view === "admin") return;
     const controller = new AbortController();
     void api.context(controller.signal).then((value) => {
       if (!controller.signal.aborted) setContext(value);
     }).catch((error: unknown) => { if (!controller.signal.aborted) setError(message(error)); });
     return () => controller.abort();
-  }, [account, api, busy, refresh]);
+  }, [account, api, busy, refresh, view]);
+
+  function navigate(next: PortalView) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", next);
+    window.history.pushState(null, "", url);
+    setView(next);
+  }
 
   async function authenticate(signOut = false) {
-    setOnboardingOpen(false);
     setAccount(null);
     setContext(null);
+    setCapabilities(null);
+    setCapabilityError("");
     setError("");
     setBusy(true);
     try {
@@ -44,7 +93,7 @@ export function HostedPortal({ config, auth, requestPage }: { config: DemoConfig
   }
   if (!account || busy) return <main className="login-shell"><section className="card login-card">
     <span className="eyebrow">COPILOT BUDGET PORTAL</span>
-    <h1>{requestPage ? "Request a higher allowance" : "Sign in to your budgets"}</h1>
+    <h1>{view === "request" ? "Request a higher allowance" : "Sign in to your budgets"}</h1>
     <p className="muted">Use your work account. Requests do not require Graph permissions.</p>
     <button disabled={busy} onClick={() => void authenticate()}>{busy ? "Completing sign-in / sign-out..." : "Sign in with Microsoft"}</button>
     {error && <p className="error" role="alert">{error}</p>}
@@ -52,27 +101,47 @@ export function HostedPortal({ config, auth, requestPage }: { config: DemoConfig
 
   return <main className="shell">
     <header className="masthead"><div><span className="eyebrow">COPILOT BUDGET PORTAL</span>
-      <h1>{requestPage ? "Request an Enhanced allowance" : "Your owner workspace"}</h1>
-      <p className="muted">Shared requests. Current owners. Manual fulfilment.</p></div>
+      <h1>{viewNames[view]}</h1>
+      <p className="muted">{view === "admin" ? "Review setup requests and inspect spending-policy ownership." :
+        view === "owner" ? "Your budgets, consumption and employee requests." : "Ask your policy owner for an Enhanced allowance."}</p></div>
       <div className="operator"><p>{account.username}</p><div className="actions">
         <button className="secondary" onClick={() => void authenticate()}>Switch account / renew sign-in</button>
         <button className="secondary" onClick={() => void authenticate(true)}>Sign out</button>
       </div></div></header>
-    <nav className="actions"><a href="?view=request">Request an increase</a><a href="?">Owner workspace</a>
-      <button className="secondary" onClick={() => setOnboardingOpen((value) => !value)}>{onboardingOpen ? "Back to workspace" : "Request a new BU"}</button>
-      <button className="secondary" onClick={() => { setError(""); setRefresh((n) => n + 1); }}>Refresh workspace</button></nav>
-    {onboardingOpen && <BusinessUnitOnboarding key={`${account.homeAccountId}:${account.localAccountId}`} api={api} auth={auth} account={account}
-      onPublished={() => { setError(""); setRefresh((value) => value + 1); }} />}
-    {!onboardingOpen && error && <p className="error" role="alert">{error}</p>}
-    {!onboardingOpen && !context && !error && <p role="status">Loading your authorized workspace...</p>}
-    {!onboardingOpen && context && <>
-      <div className="notice">Approval records a decision only. It does not change a policy, allowance or group membership.
+    <PortalNavigation view={view} isAdmin={capabilities?.isAdmin === true} onSelect={navigate} />
+    <div className="actions"><button className="secondary" onClick={onPublished}>Refresh workspace</button></div>
+    {capabilityError && <p className="error" role="alert">Could not verify administrator access. {capabilityError}</p>}
+    {view === "admin" && <>
+      {!capabilities && !capabilityError && <p role="status">Checking administrator access...</p>}
+      {capabilities && !capabilities.isAdmin && <p className="error" role="alert">Administrator access is required. Choose Policy owner or Request credits.</p>}
+      {capabilities?.isAdmin && <>
+        <nav className="actions" aria-label="Admin sections">
+          <button className={adminSection === "requests" ? "" : "secondary"} aria-pressed={adminSection === "requests"}
+            onClick={() => setAdminSection("requests")}>Setup requests</button>
+          <button className={adminSection === "policies" ? "" : "secondary"} aria-pressed={adminSection === "policies"}
+            onClick={() => setAdminSection("policies")}>Spending policies</button>
+        </nav>
+        {adminSection === "requests" ? <BusinessUnitOnboarding api={api} auth={auth} account={account}
+          mode="admin" capabilities={capabilities} onPublished={onPublished} /> :
+          <AdminPolicies key={refresh} api={api} auth={auth} account={account} />}
+      </>}
+    </>}
+    {view !== "admin" && error && <p className="error" role="alert">{error}</p>}
+    {view !== "admin" && !context && !error && <p role="status">Loading your authorized workspace...</p>}
+    {view !== "admin" && context && <>
+      <div className="notice">Credit-increase approval records a decision only. It does not change a policy, allowance or group membership.
         Owners may approve their own requests in this MVP. Temporary increases use the UTC calendar month for this demo; no automatic reversion is scheduled.</div>
-      {requestPage ? <SubmissionForm api={api} context={context} /> : <>
-        {!context.ownedBudgets.length ? <section className="card"><h2>No budgets assigned</h2><p>Contact the administrator if you should be an owner. No Graph data has been requested.</p></section> :
+      {view === "request" ? <SubmissionForm api={api} context={context} /> : <>
+        {!context.ownedBudgets.length ? <section className="card"><h2>Set up your first spending budget</h2>
+          <p>Request a new business unit below. An administrator must approve the budget before Standard and Enhanced policies are created.
+            If you already manage a policy, ask the administrator to check its owner mapping. No Graph data has been requested.</p></section> :
           <><RequestList api={api} inbox /><OwnerGraph budgets={context.ownedBudgets} serviceId={context.serviceId} auth={auth} account={account} api={api} /></>}
       </>}
     </>}
+    {view === "owner" && <details className="card setup-panel" open={!context?.ownedBudgets.length}>
+      <summary>{context?.ownedBudgets.length ? "Request another business unit / view setup requests" : "Request a new BU / set up spending policies"}</summary>
+      <BusinessUnitOnboarding api={api} auth={auth} account={account} mode="owner" capabilities={capabilities} onPublished={onPublished} />
+    </details>}
     <footer>Evaluation only. Requests are stored privately. Graph preview APIs are not supported for production applications.</footer>
   </main>;
 }

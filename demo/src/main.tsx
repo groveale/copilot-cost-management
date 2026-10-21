@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { DemoAuth } from "./auth";
 import { loadConfig } from "./config";
-import { HostedPortal } from "./HostedPortal";
+import { HostedPortal, portalView } from "./HostedPortal";
 import "./styles.css";
 
 async function start() {
@@ -20,10 +20,8 @@ async function start() {
     }
     const auth = new DemoAuth(config);
     await auth.initialize();
-    const requestPage = new URLSearchParams(window.location.search).get("view") === "request";
     if (!disposed) {
-      document.title = requestPage ? "Copilot Budget Portal | Request an increase" : "Copilot Budget Portal | Live budget details";
-      app.render(<HostedPortal config={config} auth={auth} requestPage={requestPage} />);
+      app.render(<HostedPortal config={config} auth={auth} initialView={portalView(window.location.search)} />);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

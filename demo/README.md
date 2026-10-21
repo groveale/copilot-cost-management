@@ -25,6 +25,27 @@ MSAL v5 redirect bridge and both HTML build entries are required.
 
 - Nothing beyond sign-in is rendered before login. After login the API returns
   the caller's authorized context using stable tenant/user object IDs.
+- Persistent **Admin**, **Policy owner** and **Request credits** switches share
+  the signed-in identity. The view is reflected in `?view=admin`, `?view=owner`
+  or the existing `?view=request`; browser back/forward restores the view.
+  Switching views clears that view's draft and operation ID.
+- **Admin** is shown only after the API verifies administrator access. Direct
+  admin URLs do not grant access. **Setup requests** contains the review queue
+  and the explicitly enabled private JSON importer. **Spending policies**
+  connects directly to delegated Graph and reads every spending-policy page,
+  not just configured budgets. The inventory is read-only. Business unit,
+  cost centre, tier and owner mappings come from private metadata; missing
+  mappings are explicitly **Unmapped**, never inferred from policy names or
+  Entra group ownership. Owner names are resolved through Graph; lookup failures
+  remain visible with the mapped object IDs. API/Graph failures are not replaced
+  by an empty inventory. Before initial import, the list explicitly warns that
+  portal ownership has not been configured.
+- **Policy owner** retains authorized budgets, Graph details, allowance approvals
+  and budget allocation. Its setup area allows a first or additional BU request
+  and shows the caller's setup history, even when the main workspace has not yet
+  been initialized. It does not expose administrator review or bootstrap tools.
+- **Request credits** contains only the employee's allowance request and history.
+  BU setup requests go to administrators; credit increases go to budget owners.
 - `?view=request` requests only OIDC and the application's delegated API scope.
   The form submits business justification (20-2000 characters), permanent or
   temporary duration, and a client-generated operation ID. Routing is server-side.

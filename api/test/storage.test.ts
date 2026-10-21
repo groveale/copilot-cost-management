@@ -92,7 +92,7 @@ describe("Azure Table persistence adapter", () => {
       sdk.download.mockRejectedValue({ statusCode: 404, code: "BlobNotFound" });
       await expect(store().metadata()).rejects.toBeInstanceOf(ApiError);
       await expect(store().metadata()).rejects.toMatchObject({
-        status: 409, code: "setup-required", message: expect.stringContaining('"Request a new BU"'),
+        status: 409, code: "setup-required", message: expect.stringContaining('"Admin" > "Setup requests"'),
       });
       expect(await onboarding().metadata()).toEqual({ metadata: null, etag: null });
       expect(sdk.uploadData).not.toHaveBeenCalled();

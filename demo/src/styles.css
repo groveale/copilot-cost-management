@@ -66,6 +66,17 @@ p { margin: 0 0 16px; }
 .passed { color: var(--cp-text); border-color: var(--cp-success); }
 .failed { color: var(--cp-danger); border-color: var(--cp-danger); }
 .actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.portal-navigation { padding: 16px 0; border-bottom: 1px solid var(--cp-border); }
+.portal-navigation button { min-width: 144px; }
+.setup-panel { margin-top: 24px; }
+.onboarding-workspace { display: grid; gap: 16px; margin-top: 16px; }
+.table-scroll { max-width: 100%; overflow-x: auto; margin-top: 16px; }
+.policy-inventory { width: 100%; min-width: 880px; border-collapse: collapse; text-align: left; }
+.policy-inventory caption { text-align: left; margin-bottom: 12px; color: var(--cp-text-muted); font-size: 13px; }
+.policy-inventory th, .policy-inventory td { padding: 16px 12px; border-bottom: 1px solid var(--cp-border); vertical-align: top; }
+.policy-inventory th { background: var(--cp-surface-soft); font-size: 13px; }
+.policy-inventory .mono { max-width: 280px; }
+.mapped-owner + .mapped-owner { margin-top: 12px; }
 button { background: var(--cp-accent); color: var(--cp-accent-fg); border: 1px solid var(--cp-accent); padding: 10px 16px; border-radius: 10px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
 button:hover:not(:disabled) { background: var(--cp-accent-hover); }
 button.secondary { background: var(--cp-surface); color: var(--cp-text); border-color: var(--cp-border-strong); }

@@ -201,15 +201,15 @@ private-network acceptance before the hosted form can be presented as ready.
 
 ## BU onboarding and browser bootstrap
 
-The signed-in **Request a new BU** page is independent of budget metadata, so
+The signed-in **Policy owner** setup area is independent of budget metadata, so
 ordinary users can submit requests before their BU exists. Ownership comes from
 the API-validated tenant/object ID, never a form field or email. Available token
 name/contact claims are display hints only.
 
 Before the first import, the ordinary workspace returns HTTP 409
-`setup-required` when the metadata blob does not exist. Open **Request a new BU**
-to continue; a configured administrator can import the initial private JSON
-there, then refresh the workspace. The onboarding page remains available without
+`setup-required` when the metadata blob does not exist. Open **Policy owner**
+to request a BU; a configured administrator can import the initial private JSON
+under **Admin > Setup requests**, then refresh the workspace. Setup remains available without
 that blob. Missing containers, denied access, invalid metadata and other storage
 failures remain errors; they are not treated as an empty initialized workspace.
 The setup endpoint sends literal JSON `null` before initialization, as does an
@@ -251,7 +251,7 @@ code as the onboarding release.
 3. Publish the application, frontend, tests and script changes in the second
    phase. Deploy using the existing protected application workflow only after
    the infrastructure and access changes are ready.
-4. Sign in as a configured administrator, open **Request a new BU**, and use
+4. Sign in as a configured administrator, open **Admin > Setup requests**, and use
    **Import initial private Legal JSON**. Upload the ignored private seed from
    the local machine. The browser needs no direct storage connectivity.
 5. Imports add budgets and create supplied requester mappings. Identical imports
