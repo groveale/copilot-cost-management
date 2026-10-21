@@ -1,6 +1,11 @@
 name: Infrastructure
 on:
   workflow_dispatch:
+    inputs:
+      enable_bootstrap:
+        description: Enable admin-only initial JSON import (disable after seeding)
+        type: boolean
+        default: false
 permissions:
   contents: read
 defaults:
@@ -29,6 +34,7 @@ jobs:
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           SPA_CLIENT_ID: ${{ vars.SPA_CLIENT_ID }}
           API_CLIENT_ID: ${{ vars.API_CLIENT_ID }}
+          BOOTSTRAP_ENABLED: ${{ inputs.enable_bootstrap && 'true' || 'false' }}
         run: |
           mkdir -p deployment
           az bicep build --file infra/main.bicep --outfile deployment/main.json
@@ -37,9 +43,12 @@ jobs:
       - name: Review what-if
         env:
           RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          ONBOARDING_ADMIN_OBJECT_IDS: ${{ secrets.ONBOARDING_ADMIN_OBJECT_IDS }}
         run: |
-          az deployment group what-if --resource-group "$RESOURCE_GROUP" --template-file deployment/main.json --parameters @deployment/parameters.json --mode Incremental --no-pretty-print | tee deployment/whatif.txt
-          cat deployment/whatif.txt >> "$GITHUB_STEP_SUMMARY"
+          node -e 'const v=process.env.ONBOARDING_ADMIN_OBJECT_IDS; if(!v || !v.split(",").every(s => /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(s.trim()) && !/^0{8}(-0{4}){3}-0{12}$/.test(s.trim()))) throw Error("Configure the private ONBOARDING_ADMIN_OBJECT_IDS repository secret");'
+          printf '%s' "$ONBOARDING_ADMIN_OBJECT_IDS" | sha256sum | cut -d ' ' -f 1 > deployment/admin-config.sha256
+          az deployment group what-if --resource-group "$RESOURCE_GROUP" --template-file deployment/main.json --parameters @deployment/parameters.json onboardingAdminObjectIds="$ONBOARDING_ADMIN_OBJECT_IDS" --mode Incremental --no-pretty-print
+          echo "Review the what-if in this job's logs before approving. Private administrator IDs are not stored in the deployment artifact." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: reviewed-infrastructure
@@ -65,8 +74,11 @@ jobs:
       - name: Apply exactly the reviewed template and parameters
         env:
           RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          ONBOARDING_ADMIN_OBJECT_IDS: ${{ secrets.ONBOARDING_ADMIN_OBJECT_IDS }}
         run: |
-          az deployment group create --name "github-${GITHUB_RUN_ID}" --resource-group "$RESOURCE_GROUP" --template-file deployment/main.json --parameters @deployment/parameters.json --mode Incremental --query properties.outputs
+          actual=$(printf '%s' "$ONBOARDING_ADMIN_OBJECT_IDS" | sha256sum | cut -d ' ' -f 1)
+          test "$actual" = "$(cat deployment/admin-config.sha256)" || { echo "Administrator configuration changed after review. Restart the workflow."; exit 1; }
+          az deployment group create --name "github-${GITHUB_RUN_ID}" --resource-group "$RESOURCE_GROUP" --template-file deployment/main.json --parameters @deployment/parameters.json onboardingAdminObjectIds="$ONBOARDING_ADMIN_OBJECT_IDS" --mode Incremental --query properties.outputs
       - name: Verify deployed private networking and identity
         shell: pwsh
         env:

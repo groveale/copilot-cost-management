@@ -25,6 +25,10 @@ resource index 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-0
   parent: tableService
   name: 'RequesterBudgetIndex'
 }
+resource onboarding 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' existing = {
+  parent: tableService
+  name: 'OnboardingRequests'
+}
 resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
   parent: business
   name: 'default'
@@ -36,10 +40,8 @@ resource metadata 'Microsoft.Storage/storageAccounts/blobServices/containers@202
 resource insights 'Microsoft.Insights/components@2020-02-02' existing = { name: insightsName }
 
 var blobOwner = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
-var blobReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 var blobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var tableContributor = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
-var tableReader = '76199698-9eea-4c19-bc75-cec21354c6b6'
 var metricsPublisher = '3913510d-42f4-4e42-8a64-420c390055eb'
 var contributor = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 var websiteContributor = 'de139f84-1756-47ae-9be6-808fbbe84772'
@@ -66,20 +68,29 @@ resource requestsAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 resource indexAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: index
-  name: guid(index.id, runtimeId, tableReader)
+  name: guid(index.id, runtimeId, tableContributor)
   properties: {
     principalId: runtimeId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableReader)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableContributor)
   }
 }
 resource metadataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: metadata
-  name: guid(metadata.id, runtimeId, blobReader)
+  name: guid(metadata.id, runtimeId, blobContributor)
   properties: {
     principalId: runtimeId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobReader)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributor)
+  }
+}
+resource onboardingAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: onboarding
+  name: guid(onboarding.id, runtimeId, tableContributor)
+  properties: {
+    principalId: runtimeId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableContributor)
   }
 }
 resource telemetryAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

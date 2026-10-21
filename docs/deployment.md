@@ -8,8 +8,10 @@
 - Dedicated UK South VNet, outbound Flex integration and private Blob/Table
   endpoints with private DNS. Both storage accounts disable public networking;
   private endpoints/DNS have ongoing charges even when the Function scales to zero.
-- Private JSON blob for budget/owner metadata; `RequesterBudgetIndex` and
-  `Requests` Tables. No Graph proxy or application Graph permissions.
+- Private JSON blob for budget/owner metadata; `RequesterBudgetIndex`,
+  `Requests` and `OnboardingRequests` Tables. No Graph proxy or application
+  Graph permissions. New BU provisioning/allocation uses delegated Graph in
+  the administrator/owner browser.
 - UK South Application Insights/Log Analytics; 30-day retention, sampling and a
   small workspace ingestion cap. These are **not hard spending caps**.
 - Function runtime uses its **system-assigned managed identity** for host state,
@@ -20,7 +22,8 @@
   Graph tokens, ID tokens or the Function's identity.
 - GitHub has separate infrastructure/application federated identities. The only
   deployment-token exception is the site-scoped **frontend-only SWA token**.
-- Approval records a decision; Graph fulfilment is manual. No notification,
+- Allowance-increase approval records a decision; its Graph fulfilment is manual.
+  BU onboarding approval is a separate real provisioning workflow. No notification,
   expiry worker, automatic allowance changes, backups or recovery SLA.
 
 ## Before provisioning
@@ -106,9 +109,11 @@ privileged `access.bicep` template: `functionName`, **functionPrincipalId**,
 Review its what-if first. No normal CI job has role-assignment authority.
 
 Runtime scope: Blob Data Owner on host storage for this HTTP-only Functions host
-and package read/write; Table Data Contributor on **Requests only**; Table Data
-Reader on **RequesterBudgetIndex only**; Blob Data Reader on the **metadata
-container only**; Monitoring Metrics Publisher on Insights. There are no triggers
+and package read/write; Table Data Contributor on the **Requests**,
+**OnboardingRequests** and **RequesterBudgetIndex** tables individually; Blob
+Data Contributor on the **metadata container only**; Monitoring Metrics Publisher
+on Insights. These narrowly scoped writes support ongoing onboarding, not only
+one-off seeding. There are no triggers
 requiring queue/durable/table host permissions. The seed operator gets write
 access to the index and metadata, not the request store.
 
@@ -189,9 +194,124 @@ explicit, targeted operator changes; omission does not delete an index row.
 Application deployments never seed or reset data.
 Offline validation works locally; **Apply must run from a network with private
 DNS and connectivity to these endpoints**, as well as the scoped Entra roles.
-No network-connected seeding worker is created by this template. Until that
-path is configured and tested, seeding and customer-ready application verification
-remain incomplete; do not present the hosted form as ready for use.
+No network-connected seeding worker is created by this template. The admin-only
+browser bootstrap described below instead executes writes inside the already
+VNet-integrated Function. It still needs deployment, scoped roles and actual
+private-network acceptance before the hosted form can be presented as ready.
+
+## BU onboarding and browser bootstrap
+
+The signed-in **Request a new BU** page is independent of budget metadata, so
+ordinary users can submit requests before their BU exists. Ownership comes from
+the API-validated tenant/object ID, never a form field or email. Available token
+name/contact claims are display hints only.
+
+Configure a comma-separated `ONBOARDING_ADMIN_OBJECT_IDS` **repository secret**.
+This is private authorization configuration, not a credential or Function key.
+Use verified user object IDs, not UPNs. No other budget owner automatically
+becomes an onboarding administrator. An empty allowlist disables administration.
+Never put the real allowlist or seed file into public bootstrap JSON.
+
+```powershell
+'<verified-admin-object-id>' | gh secret set ONBOARDING_ADMIN_OBJECT_IDS --repo <owner>/<repo>
+```
+
+Deployment order for this feature:
+
+Publish in two phases. First publish only the infrastructure templates,
+Infrastructure workflow and deployment documentation. Hold application,
+frontend and script changes until after steps 1-2: those paths trigger the
+application workflow, which shares the infrastructure release concurrency
+lock and can block Infrastructure while awaiting approval. Resolve any
+obsolete waiting release before starting; do not approve older application
+code as the onboarding release.
+
+1. Run **Infrastructure** with `enable_bootstrap: true`. Review what-if in its
+   logs, then approve apply. The secure administrator parameter is injected at
+   execution, not stored in the artifact; a digest binds its value between
+   what-if and apply. Restart if that secret changes during review. ARM what-if
+   can omit Function app settings: after apply, verify the administrator
+   allowlist is configured without printing it, the bootstrap flag is enabled
+   and the onboarding table exists.
+2. Separately review/apply the privileged `access.bicep` changes using the
+   existing Function principal and current deployment outputs. Normal CI cannot
+   grant these roles. Incremental deployment can leave the older narrow reader
+   grants present; no role assignments are automatically deleted.
+3. Publish the application, frontend, tests and script changes in the second
+   phase. Deploy using the existing protected application workflow only after
+   the infrastructure and access changes are ready.
+4. Sign in as a configured administrator, open **Request a new BU**, and use
+   **Import initial private Legal JSON**. Upload the ignored private seed from
+   the local machine. The browser needs no direct storage connectivity.
+5. Imports add budgets and create supplied requester mappings. Identical imports
+   can be replayed; different existing budgets/mappings conflict instead of
+   being overwritten. Requests are never cleared. Blob/Table writes are not
+   atomic: a failed import can be partial; resolve the error and retry the same
+   file. The older CLI seed tool intentionally retains its replacement/upsert
+   semantics and is an in-network operator tool, not this additive endpoint.
+6. Rerun Infrastructure with bootstrap disabled after confirming the import.
+   This disables `POST /api/v1/onboarding/bootstrap`; ongoing onboarding keeps
+   its narrowly scoped storage writes.
+
+For direct operator ARM deployment, supply the secure
+`onboardingAdminObjectIds` parameter every time and set `bootstrapEnabled`
+explicitly. Omitting the allowlist resets it to empty (fail closed). The
+subscription wrapper forwards both settings. Neither deployment compiles the
+private seed into the application.
+
+### Approval, provisioning and allocation
+
+- A request contains BU name, cost centre, monthly USD planning budget and a
+  justification. It is persisted with a payload-bound operation ID and has no
+  Graph side effects or ownership grant at submission.
+- The user-selected demo convention is **USD 0.01 per Copilot Credit**, not an
+  actual rated price or a purchase. Amounts are parsed as integer cents.
+  **USD 20,000 = 2,000,000 credits**, initially **1,000,000 per policy**. A spare
+  whole credit goes to Enhanced when the total is odd. The period is a UTC month.
+- The administrator selects an existing BU template and explicitly loads its
+  Standard/Enhanced per-user limits and billing methods using Graph. Unlimited
+  remains explicit, not an error fallback. The administrator confirms manual
+  cost-centre/cross-charge validation and enters an audit note before approval.
+  There is no finance-system verification or automatic chargeback configuration.
+- **Approve and provision** creates two non-mail-enabled security groups owned
+  by the requester, without automatically enrolling the owner as a member. It
+  creates two selected-groups policies with Cowork enabled, then assigns each
+  group. Existing Legal resources are not edited.
+- Graph policy creation supports delegated permissions only and currently
+  requires Billing Administrator or Global Administrator at runtime. Use the
+  approving admin's separate Graph connection and the existing consented scopes.
+  The Function's system-assigned identity is for Azure storage, not Graph.
+  Directory roles are assumed, never granted by this workflow.
+- The browser verifies ownership, policy configuration, audiences and activation
+  before attesting completion to the admin-only API. The Function validates
+  authorization/state and publishes IDs and the immutable approved ceiling.
+  It does not independently call Graph to verify that administrator attestation.
+- ETags protect decisions/checkpoints; a five-minute operation lease coordinates
+  sessions. Progress is durable. A lost create response is reconciled by its
+  operation-specific resource marker/name; an unresolved create is never blindly
+  repeated. Definitive Graph request rejection allows an explicit retry.
+  Closing the browser pauses work; resume via the administrator queue after any
+  outstanding lease expires. Partial resources are not automatically deleted.
+- Owners see the new budget in their workspace, then separately connect Graph
+  for live data. Their delegated permissions/roles are assumed, not inferred
+  from group ownership. Request status refreshes while the onboarding page is
+  open; there is no notification delivery.
+- **Allocate the approved monthly budget** supports later tier changes, such as
+  **1.5M Standard / 500K Enhanced** under the same 2M ceiling. Server-side plans
+  recheck current ownership, resource mappings and the approved ceiling.
+  Decreases happen before increases; actual Graph values and fresh policy ETags
+  are checked. Failed allocations retain a resumable plan.
+- This is an **application guardrail**, not a tenant-wide financial guarantee.
+  Separately authorized admin-center/Graph changes can bypass it. API operations,
+  metadata writes and Graph provisioning are not one atomic transaction.
+- Onboarding does not change existing requester routing. New group membership
+  and ordinary users' requester-index mappings remain explicit administration;
+  BU ownership alone is sufficient to expose the owner workspace.
+
+Before customer use, exercise ordinary-user submission, administrator approval,
+actual Graph provisioning, owner refresh, allocation/reload and lost-response
+recovery in the deployed environment. Unit tests use fake Graph responses; they
+do not establish that tenant provisioning or private storage access works live.
 
 ## GitHub configuration
 
@@ -224,9 +344,14 @@ it in ARM outputs. Rotate/reset in SWA's deployment-token management, then repla
 the environment secret. No Function keys, account keys, SAS, publish profiles or
 Azure client-secret GitHub secrets.
 
+Set the separate repository secret `ONBOARDING_ADMIN_OBJECT_IDS` as described
+above before using the updated infrastructure workflow. The compiled templates,
+parameter artifact and frontend never contain its actual value.
+
 - **Validate:** credential-free tests/build, Bicep compilation and output checks.
 - **Infrastructure:** manual main-only what-if; uploads the compiled template,
-  parameters and resource summary. A protected apply job consumes the **same**
+  parameters and private-configuration digest. Review what-if in the masked job
+  logs; its raw output is not uploaded. A protected apply job consumes the **same**
   artifact. Review the summary before approval; restart the run if code/parameters
   or live state changed. ARM what-if can show service-default noise. After apply,
   actual private-network configuration is checked; policy-modified settings

@@ -6,6 +6,9 @@ param location string = 'uksouth'
 param tenantId string
 param spaClientId string
 param apiClientId string
+@secure()
+param onboardingAdminObjectIds string = ''
+param bootstrapEnabled bool = false
 
 resource group 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
@@ -26,6 +29,8 @@ module resources './main.bicep' = {
     tenantId: tenantId
     spaClientId: spaClientId
     apiClientId: apiClientId
+    onboardingAdminObjectIds: onboardingAdminObjectIds
+    bootstrapEnabled: bootstrapEnabled
   }
 }
 output resources object = resources.outputs

@@ -7,6 +7,11 @@ param tenantId string
 param spaClientId string
 @description('API registration client ID. Configure v2 access tokens in Entra.')
 param apiClientId string
+@secure()
+@description('Comma-separated onboarding administrator object IDs. Empty disables administration.')
+param onboardingAdminObjectIds string = ''
+@description('Explicitly enable additive private bootstrap import; disable after initial seeding.')
+param bootstrapEnabled bool = false
 
 var suffix = uniqueString(resourceGroup().id, prefix)
 var tags = { application: 'copilot-cost-demo', environment: 'demo' }
@@ -72,6 +77,10 @@ resource requests 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-0
 resource index 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
   parent: tables
   name: 'RequesterBudgetIndex'
+}
+resource onboarding 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tables
+  name: 'OnboardingRequests'
 }
 module network './network.bicep' = {
   name: 'private-storage-network'
@@ -152,6 +161,8 @@ resource api 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'API_AUDIENCE', value: apiClientId }
         { name: 'BUSINESS_TABLE_URL', value: business.properties.primaryEndpoints.table }
         { name: 'BUSINESS_BLOB_URL', value: business.properties.primaryEndpoints.blob }
+        { name: 'ONBOARDING_ADMIN_OBJECT_IDS', value: onboardingAdminObjectIds }
+        { name: 'BOOTSTRAP_ENABLED', value: bootstrapEnabled ? 'true' : 'false' }
       ]
     }
     functionAppConfig: {
