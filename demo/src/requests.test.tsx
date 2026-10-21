@@ -108,14 +108,14 @@ describe("identity to budget to owner routing", () => {
     const route = resolveRequestRoute(changed, requester);
     expect(route.state === "ready" ? route.approvers : []).toEqual(["new.owner@example.test"]);
   });
-  it("requires valid owners and excludes the requester from self-approval", () => {
-    for (const owners of [[], ["Demo owner"], ["person@example.test"]]) {
+  it("requires valid owners and permits owner self-approval for the MVP", () => {
+    for (const owners of [[], ["Demo owner"]]) {
       expect(resolveRequestRoute({ ...config, budgets: [{ ...config.budgets[0], owners }] }, requester).state).toBe("needs-routing");
     }
     const route = resolveRequestRoute({
       ...config, budgets: [{ ...config.budgets[0], owners: ["person@example.test", "OWNER@EXAMPLE.TEST", "owner@example.test"] }],
     }, requester);
-    expect(route.state === "ready" ? route.approvers : []).toEqual(["owner@example.test"]);
+    expect(route.state === "ready" ? route.approvers : []).toEqual(["person@example.test", "owner@example.test"]);
   });
 });
 
@@ -175,10 +175,10 @@ describe("requester and example inbox rendering", () => {
     expect(html).toContain("captured temporary period has ended");
     expect(html).toContain('type="button" disabled=""');
   });
-  it("disables self-approval even when the requester is an owner", () => {
+  it("allows self-approval when the requester is the sole owner", () => {
     const self = { ...config, budgets: [{ ...config.budgets[0], owners: [requester.username] }] };
     const html = renderToStaticMarkup(<ExampleRequests config={self} budget={self.budgets[0]} account={requester} />);
-    expect(html).toContain("cannot approve your own request");
-    expect(html).toContain('type="button" disabled=""');
+    expect(html).not.toContain("cannot approve your own request");
+    expect(html).toContain('type="button">Preview approval');
   });
 });

@@ -23,7 +23,7 @@ const config = parseConfig({
   budgets: [
     {
       id: "legal", displayName: "Legal", businessArea: "Legal", costCenter: "legal-cost-centre",
-      owners: ["admin@m365cpi77517573.onmicrosoft.com", "coowner@example.test"],
+      owners: ["owner@example.test", "coowner@example.test"],
       tiers: {
         standard: { policyId: id(3), groupId: id(4) },
         enhanced: { policyId: id(5), groupId: id(6) },
@@ -44,7 +44,7 @@ const account: AccountInfo = {
   localAccountId: "test-local",
   tenantId: config.tenantId,
   environment: "login.microsoftonline.com",
-  username: "admin@M365CPI77517573.onmicrosoft.com",
+  username: "OWNER@example.test",
 };
 
 beforeEach(() => {
@@ -64,12 +64,12 @@ describe("JSON owner lookup", () => {
   it("does not return any budgets before sign-in", () => {
     expect(budgetsForOwner(config, null)).toEqual([]);
   });
-  it("matches the real Legal owner case-insensitively", () => {
+  it("matches the Legal owner case-insensitively", () => {
     expect(budgetsForOwner(config, account).map((budget) => budget.id)).toEqual(["legal"]);
   });
   it("supports a co-owner and whitespace without using substring or domain matches", () => {
     expect(budgetsForOwner(config, { ...account, username: "  COOWNER@example.test  " }).map((budget) => budget.id)).toEqual(["legal"]);
-    for (const username of ["", " ", "admin", "@m365cpi77517573.onmicrosoft.com", "admin@m365cpi77517573.onmicrosoft.com.attacker.test"]) {
+    for (const username of ["", " ", "owner", "@example.test", "owner@example.test.attacker.test"]) {
       expect(budgetsForOwner(config, { ...account, username })).toEqual([]);
     }
   });
@@ -96,7 +96,7 @@ describe("owner workspace rendering", () => {
     expect(html).toContain("Sign in with Microsoft");
     expect(html).not.toContain("Legal");
     expect(html).not.toContain("Finance");
-    expect(html).not.toContain("admin@m365cpi77517573.onmicrosoft.com");
+    expect(html).not.toContain("owner@example.test");
     expect(html).not.toContain(config.tenantId);
     expect(html).not.toContain(config.clientId);
     expect(html).not.toContain(config.budgets[0].tiers.standard.policyId);

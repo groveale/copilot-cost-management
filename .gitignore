@@ -3,3 +3,14 @@
 /Get-CopilotCostManagementData.ps1
 /New-CopilotCostManagementConsentUrl.ps1
 /SPEC.md
+/explore.md
+node_modules/
+dist/
+coverage/
+local.settings.json
+.env
+.env.*
+*.private.json
+*.bicep.json
+infra/*.parameters.json
+test-results/

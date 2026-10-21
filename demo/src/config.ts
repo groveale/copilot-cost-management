@@ -17,6 +17,8 @@ export interface DemoConfig {
   version: 1;
   tenantId: string;
   clientId: string;
+  apiBaseUrl?: string;
+  apiScope?: string;
   serviceId: string;
   budgets: BudgetConfig[];
   requesterIndex?: RequesterMapping[];
@@ -171,11 +173,24 @@ export function parseConfig(input: unknown): DemoConfig {
     version: 1,
     tenantId: guid(data.tenantId, "tenantId"),
     clientId: guid(data.clientId, "clientId"),
+    apiBaseUrl: data.apiBaseUrl === undefined ? undefined : apiUrl(data.apiBaseUrl),
+    apiScope: data.apiScope === undefined ? undefined : text(data.apiScope, "apiScope"),
     serviceId: text(data.serviceId, "serviceId"),
     budgets,
     requesterIndex,
     exampleRequests,
   };
+}
+
+function apiUrl(value: unknown): string {
+  const url = new URL(text(value, "apiBaseUrl"));
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) {
+    throw new Error("API URL must use HTTPS (or localhost for development).");
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new Error("API URL must be an origin without credentials, path or query.");
+  }
+  return url.origin;
 }
 
 export async function loadConfig(): Promise<DemoConfig> {

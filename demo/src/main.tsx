@@ -1,8 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { DemoAuth } from "./auth";
-import { BudgetPortal } from "./BudgetPortal";
 import { loadConfig } from "./config";
-import { RequestPage } from "./RequestPage";
+import { HostedPortal } from "./HostedPortal";
 import "./styles.css";
 
 async function start() {
@@ -16,12 +15,15 @@ async function start() {
   });
   try {
     const config = await loadConfig();
+    if (!config.apiBaseUrl || !config.apiScope || config.apiBaseUrl.includes("configure-your-api")) {
+      throw new Error("Hosted API configuration is incomplete. Ask the administrator to deploy the public bootstrap settings.");
+    }
     const auth = new DemoAuth(config);
     await auth.initialize();
     const requestPage = new URLSearchParams(window.location.search).get("view") === "request";
     if (!disposed) {
       document.title = requestPage ? "Copilot Budget Portal | Request an increase" : "Copilot Budget Portal | Live budget details";
-      app.render(requestPage ? <RequestPage config={config} auth={auth} /> : <BudgetPortal config={config} auth={auth} />);
+      app.render(<HostedPortal config={config} auth={auth} requestPage={requestPage} />);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

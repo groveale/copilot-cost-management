@@ -23,11 +23,7 @@ export function resolveRequestRoute(config: DemoConfig, account: RequestIdentity
   if (owners.length === 0 || owners.some((owner) => !/^[^@\s]+@[^@\s]+$/.test(owner))) {
     return { state: "needs-routing", budget, reason: "This budget needs valid owner sign-in usernames before requests can be routed." };
   }
-  const approvers = owners.filter((owner) => owner !== username);
-  if (approvers.length === 0) {
-    return { state: "needs-routing", budget, reason: "You are the only owner of this budget. Add a different eligible owner or use administrative triage; you cannot approve your own request." };
-  }
-  return { state: "ready", budget, approvers };
+  return { state: "ready", budget, approvers: owners };
 }
 
 export function periodEndUtc(requestedAt: Date): string {

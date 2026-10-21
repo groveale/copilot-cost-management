@@ -56,7 +56,7 @@ function ExampleRequestCard({ request, config, account }: {
         <button type="button" disabled={!canDecide} onClick={() => decide("approval")}>Preview approval</button>
         <button className="secondary" type="submit" disabled={!canDecide}>Preview rejection</button>
       </div>
-      {!canDecide && !expired && <p className="reading-note">You are not an eligible approver for this example. Self-approval and uncertain routing are not permitted.</p>}
+      {!canDecide && !expired && <p className="reading-note">You are not a current owner for this example, or its routing needs administrative repair.</p>}
     </form>}
   </article>;
 }

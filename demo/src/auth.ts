@@ -43,7 +43,7 @@ export class DemoAuth {
 
   async signIn(mode: "owner" | "requester" = "owner"): Promise<AccountInfo> {
     const result = await this.app.loginPopup({
-      scopes: mode === "requester" ? requesterScopes : scopes,
+      scopes: mode === "requester" ? [...requesterScopes, ...(this.config.apiScope ? [this.config.apiScope] : [])] : scopes,
       prompt: "select_account",
     });
     if (result.account.tenantId.toLowerCase() !== this.config.tenantId) {
@@ -54,13 +54,29 @@ export class DemoAuth {
   }
 
   async token(account = this.account()): Promise<string> {
+    return this.acquire(scopes, account);
+  }
+
+  async apiToken(account = this.account()): Promise<string> {
+    if (!this.config.apiScope) throw new Error("The API permission is not configured.");
+    return this.acquire([this.config.apiScope], account);
+  }
+
+  async consentGraph(account: AccountInfo): Promise<void> {
+    const result = await this.app.acquireTokenPopup({ account, scopes });
+    if (result.account.homeAccountId !== account.homeAccountId || result.account.localAccountId !== account.localAccountId) {
+      throw new Error("The account changed during Graph consent. Sign in again.");
+    }
+  }
+
+  private async acquire(requestScopes: string[], account: AccountInfo | null): Promise<string> {
     const active = this.account();
-    if (!account || !active) throw new Error("Sign in to the configured tenant before loading Graph details.");
+    if (!account || !active) throw new Error("Sign in to the configured tenant before loading protected data.");
     if (account.tenantId.toLowerCase() !== this.config.tenantId ||
         account.homeAccountId !== active.homeAccountId || account.localAccountId !== active.localAccountId) {
-      throw new Error("The signed-in account changed. Sign in again before loading Graph details.");
+      throw new Error("The signed-in account changed. Sign in again before loading protected data.");
     }
-    const result = await this.app.acquireTokenSilent({ account, scopes });
+    const result = await this.app.acquireTokenSilent({ account, scopes: requestScopes });
     return result.accessToken;
   }
 

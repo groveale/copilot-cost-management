@@ -1,0 +1,74 @@
+name: Infrastructure
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: copilot-demo-release
+  cancel-in-progress: false
+jobs:
+  whatif:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: demo-whatif
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_INFRA_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Compile immutable deployment artifact
+        env:
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          SPA_CLIENT_ID: ${{ vars.SPA_CLIENT_ID }}
+          API_CLIENT_ID: ${{ vars.API_CLIENT_ID }}
+        run: |
+          mkdir -p deployment
+          az bicep build --file infra/main.bicep --outfile deployment/main.json
+          az bicep build-params --file infra/demo.bicepparam --outfile deployment/parameters.json
+          cp scripts/verify-network.ps1 deployment/verify-network.ps1
+      - name: Review what-if
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          az deployment group what-if --resource-group "$RESOURCE_GROUP" --template-file deployment/main.json --parameters @deployment/parameters.json --mode Incremental --no-pretty-print | tee deployment/whatif.txt
+          cat deployment/whatif.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reviewed-infrastructure
+          path: deployment/
+          retention-days: 7
+  apply:
+    needs: whatif
+    runs-on: ubuntu-latest
+    environment: demo-infra
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: reviewed-infrastructure
+          path: deployment/
+      - uses: Azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_INFRA_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Apply exactly the reviewed template and parameters
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          az deployment group create --name "github-${GITHUB_RUN_ID}" --resource-group "$RESOURCE_GROUP" --template-file deployment/main.json --parameters @deployment/parameters.json --mode Incremental --query properties.outputs
+      - name: Verify deployed private networking and identity
+        shell: pwsh
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: ./deployment/verify-network.ps1 -ResourceGroup $env:RESOURCE_GROUP -DeploymentName "github-$env:GITHUB_RUN_ID"

@@ -1,0 +1,17 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/assets/*", "/auth.html", "/demo-config.json"]
+  },
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+  },
+  "routes": [
+    { "route": "/auth.html", "headers": { "X-Frame-Options": "SAMEORIGIN" } },
+    { "route": "/demo-config.json", "headers": { "Cache-Control": "no-store" } }
+  ],
+  "mimeTypes": { ".json": "application/json" }
+}
