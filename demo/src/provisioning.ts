@@ -183,7 +183,7 @@ export async function runProvisioning(api: RequestApi, graph: GraphClient, input
         if (!groupId) throw new Error("Missing allocation group ID.");
         await verifyAudience(graph, id, groupId, signal);
         const credits = quantity(current.data.periodLimit);
-        if (credits === null) throw new Error("An unlimited policy cannot be reallocated under a finite approved ceiling.");
+        if (credits === null) throw new Error("An unlimited policy cannot be reallocated under a finite monthly ceiling.");
         return { tier, id, credits };
       }));
       actual.sort((a, b) => (record[a.tier].credits - a.credits) - (record[b.tier].credits - b.credits));

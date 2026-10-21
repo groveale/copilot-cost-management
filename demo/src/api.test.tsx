@@ -89,7 +89,9 @@ it.each([
     auth={new DemoAuth(config)} account={account} mode={mode} capabilities={{ isAdmin, bootstrapEnabled, objectId: "owner" }}
     onPublished={() => undefined} />);
   expect(html.includes("Administrator onboarding queue")).toBe(adminTools);
-  expect(html.includes('type="file"')).toBe(adminTools && bootstrapEnabled);
+  expect(html).not.toContain("Onboarding administration");
+  expect(html).not.toContain("Import private setup JSON");
+  expect(html).not.toContain('type="file"');
   expect(html.includes('name="costCenter"')).toBe(mode === "owner");
   if (mode === "admin" && !isAdmin) expect(html).toContain("Administrator access is required");
 });

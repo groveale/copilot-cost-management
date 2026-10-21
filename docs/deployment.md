@@ -220,7 +220,9 @@ name/contact claims are display hints only.
 Before the first import, the ordinary workspace returns HTTP 409
 `setup-required` when the metadata blob does not exist. Open **Policy owner > Set up a BU**
 to request a BU; a configured administrator can import the initial private JSON
-under **Admin > Setup requests**, then refresh the workspace. Setup remains available without
+through the explicitly enabled operator bootstrap API, then refresh the workspace.
+The portal no longer contains the onboarding-administration intro/import card;
+the setup review queue remains available. Setup remains available without
 that blob. Missing containers, denied access, invalid metadata and other storage
 failures remain errors; they are not treated as an empty initialized workspace.
 The setup endpoint sends literal JSON `null` before initialization, as does an
@@ -262,9 +264,11 @@ code as the onboarding release.
 3. Publish the application, frontend, tests and script changes in the second
    phase. Deploy using the existing protected application workflow only after
    the infrastructure and access changes are ready.
-4. Sign in as a configured administrator, open **Admin > Setup requests**, and use
-   **Import private setup JSON**. Upload the ignored private seed from
-   the local machine. The browser needs no direct storage connectivity.
+4. As a configured administrator, send the ignored private seed as the JSON body
+   of `POST /api/v1/onboarding/bootstrap` using an API-audience bearer token.
+   This remains an explicitly enabled operator API; its importer is not exposed
+   in the demo UI. The caller needs no direct storage connectivity. Keep the
+   private seed and bearer token out of source control, shared logs and artifacts.
 5. Imports add budgets and create supplied requester mappings. Identical imports
    can be replayed; different existing budgets/mappings conflict instead of
    being overwritten. Requests are never cleared. Blob/Table writes are not
@@ -365,7 +369,15 @@ private seed into the application.
   resume. Stale selected-policy drafts or drift in the unedited policy's saved
   allocation require reconciliation, not overwriting external changes.
   Per-user edits do not change billing methods or fixed onboarding defaults.
-  Limit editing is unavailable without a stored approved BU ceiling.
+  A missing stored approved ceiling no longer blocks editing. UI and API share
+  the explicit **GBP 5,000/month demo ceiling**, or **500,000 combined credits**
+  at an assumed GBP 0.01/credit. This is not a USD/FX conversion or financial
+  approval. Existing explicit ceilings are never replaced. The legacy
+  `approvedCredits` field freezes the effective ceiling in each allocation plan;
+  demo plans identify their GBP assumption in their justification and do not
+  invent a USD amount. This does not seed metadata or automatically patch Graph.
+  Existing over-ceiling/unlimited policy limits still require explicit
+  reconciliation; the demo fallback never silently resets them.
 - This is an **application guardrail**, not a tenant-wide financial guarantee.
   Separately authorized admin-center/Graph changes can bypass it. API operations,
   metadata writes and Graph provisioning are not one atomic transaction.

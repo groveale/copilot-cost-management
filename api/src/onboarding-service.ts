@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { Budget, Caller, Metadata, PolicyDefaults } from "./contracts.js";
 import { ApiError, metadataSchema, seedSchema } from "./model.js";
 import { requestId } from "./service.js";
-import { checkAllocation, splitCredits, usdToCredits } from "./budget-math.js";
+import { allocationCeiling, checkAllocation, splitCredits, usdToCredits } from "./budget-math.js";
 
 import { resourceKeys, type BuSubmission, type BuDecision, type WorkUpdate, type OnboardingRecord,
   type OnboardingStore, type allocationSchema, type MemberUpdate } from "./onboarding.js";
@@ -28,7 +28,7 @@ export class OnboardingService {
     if (!record || record.tenantId !== caller.tenantId) throw new ApiError(404, "not-found", "Onboarding operation not found.");
     if (record.kind === "allocation") {
       const budget = await this.budget(caller, record.budgetId);
-      checkAllocation(record.standard.credits, record.enhanced.credits, budget.approvedCreditCeiling!);
+      checkAllocation(record.standard.credits, record.enhanced.credits, allocationCeiling(budget));
       if (record.resources.standardPolicy !== budget.tiers.standard.policyId ||
           record.resources.enhancedPolicy !== budget.tiers.enhanced.policyId ||
           record.resources.standardGroup !== budget.tiers.standard.groupId ||
@@ -84,7 +84,7 @@ export class OnboardingService {
     } else {
       const defaults = (await this.store.metadata()).metadata?.onboardingDefaults;
       if (!defaults) throw new ApiError(409, "onboarding-defaults-required",
-        "Fixed onboarding defaults are not configured. Import the private JSON under Admin > Setup requests before approving.");
+        "Fixed onboarding defaults are not configured. An onboarding administrator must configure the private setup metadata before approving.");
       if (!sameDefaults(input, defaults)) {
         conflict("The policy defaults changed or differ from the private configuration. Refresh setup requests before approving.");
       }
@@ -96,16 +96,15 @@ export class OnboardingService {
     }
     return this.saved(updated, input.etag);
   }
-  private async budget(caller: Caller, id: string, requireCeiling = true): Promise<Budget> {
+  private async budget(caller: Caller, id: string): Promise<Budget> {
     const budget = (await this.store.metadata()).metadata?.budgets.find((item) => item.id === id);
     if (!budget || (!budget.owners.includes(caller.objectId) && !this.isAdmin(caller))) {
       throw new ApiError(404, "not-found", "Budget not found in your current workspace.");
     }
-    if (requireCeiling && !budget.approvedCreditCeiling) throw new ApiError(409, "no-approved-ceiling", "This budget has no onboarding-approved credit ceiling.");
     return budget;
   }
   async member(caller: Caller, budgetId: string, input: MemberUpdate) {
-    const budget = await this.budget(caller, budgetId, false);
+    const budget = await this.budget(caller, budgetId);
     if (!(["standard", "enhanced"] as const).every((tier) =>
       input.tiers[tier].policyId === budget.tiers[tier].policyId && input.tiers[tier].groupId === budget.tiers[tier].groupId)) {
       conflict("The BU policy/group mappings changed. Refresh before adding a member.");
@@ -119,10 +118,11 @@ export class OnboardingService {
   }
   async allocation(caller: Caller, budgetId: string, input?: z.infer<typeof allocationSchema>) {
     const budget = await this.budget(caller, budgetId);
+    const ceiling = allocationCeiling(budget);
     const id = `allocation-${budgetId}`;
     const existing = await this.store.get(id);
     if (!input) return existing;
-    try { checkAllocation(input.standard, input.enhanced, budget.approvedCreditCeiling!); }
+    try { checkAllocation(input.standard, input.enhanced, ceiling); }
     catch (error) { throw new ApiError(400, "invalid-allocation", error instanceof Error ? error.message : "Invalid allocation."); }
     if (existing?.operationId === input.operationId) {
       if (existing.standard.credits !== input.standard || existing.enhanced.credits !== input.enhanced ||
@@ -134,8 +134,11 @@ export class OnboardingService {
     const record: OnboardingRecord = {
       version: 1, kind: "allocation", id, tenantId: caller.tenantId, requesterId: caller.objectId,
       operationId: input.operationId, name: budget.displayName, costCenter: budget.costCenter,
-      monthlyBudgetUsd: String(budget.plannedUsd), justification: "Owner allocation within the approved monthly credit ceiling.",
-      budgetId, createdAt: this.clock().toISOString(), status: "provisioning", approvedCredits: budget.approvedCreditCeiling!,
+      monthlyBudgetUsd: budget.plannedUsd === undefined ? "" : String(budget.plannedUsd),
+      justification: budget.approvedCreditCeiling === undefined ?
+        "Owner allocation within the GBP 5,000 monthly demo ceiling: 500,000 credits at an assumed GBP 0.01/credit, not financial approval or a currency conversion." :
+        "Owner allocation within the approved monthly credit ceiling.",
+      budgetId, createdAt: this.clock().toISOString(), status: "provisioning", approvedCredits: ceiling,
       standard: { credits: input.standard, perUserCredits: 0, billingMethods: "notSpecified" },
       enhanced: { credits: input.enhanced, perUserCredits: 0, billingMethods: "notSpecified" },
       ...(input.perUserEdit ? { perUserEdit: input.perUserEdit } : {}),

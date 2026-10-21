@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { Budget, Page, PolicyDefaults } from "../../api/src/contracts";
 import type { BuSubmission, OnboardingRecord } from "../../api/src/onboarding";
-import { checkAllocation, splitCredits, usdToCredits } from "../../api/src/budget-math";
+import { allocationCeiling, checkAllocation, splitCredits, usdToCredits } from "../../api/src/budget-math";
 import { RequestApi, type OnboardingCapabilities } from "./api";
 import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import { GraphClient } from "./graph";
@@ -107,26 +107,6 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
         </fieldset>
       </form>
     </section>}
-    {admin && <section className="card"><h2>Onboarding administration</h2>
-      <p>Validate cross-charging and the cost centre outside this demo. These fields are metadata, not a finance-system integration.</p>
-      <p>New BUs always receive Standard and Enhanced policies. Per-person caps and billing methods come from fixed private JSON, not another BU.</p>
-      {capabilities?.bootstrapEnabled && <label>Import private setup JSON
-        <input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          void perform(async (signal) => {
-            if (file.size > 1_048_576) throw new Error("Seed file exceeds 1 MiB.");
-            const input: unknown = JSON.parse(await file.text());
-            try {
-              const result = await api.bootstrap(input, signal);
-              if (!signal.aborted) { setNotice(`Imported ${result.budgets} budgets and ${result.mappings} mappings. Existing requests were not reset.`); onPublished(); }
-            } catch (error) {
-              throw new Error(`Import was not confirmed and may be partial. Retry the same file after resolving the error; existing records are not cleared. ${message(error)}`);
-            }
-          });
-        }} />
-      </label>}
-    </section>}
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
     <section className="card"><h2>{admin ? "Administrator onboarding queue" : "Your BU requests"}</h2>
@@ -188,7 +168,7 @@ export function OnboardingCard({ record, admin, defaults, api, auth, account, bu
       {defaults ? <p>Fixed per-person defaults: Standard {defaults.standard.perUserCredits === null ? "Unlimited" : format(defaults.standard.perUserCredits)} credits,
         {" "}{defaults.standard.billingMethods}; Enhanced {defaults.enhanced.perUserCredits === null ? "Unlimited" : format(defaults.enhanced.perUserCredits)} credits,
         {" "}{defaults.enhanced.billingMethods}. Existing BU policies are not changed.</p> :
-        <p className="notice">Fixed defaults are not loaded. Refresh setup requests or import private setup JSON before approving.</p>}
+        <p className="notice">Fixed defaults are not loaded. Refresh setup requests or ask an onboarding administrator to configure the private setup metadata before approving.</p>}
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={(event) => setConfirmed(event.target.checked)} />
         I have validated this cost centre and cross-charging arrangement.</label>
       <label>Validation note / rejection reason (10-1000 characters)
@@ -240,7 +220,7 @@ export function BudgetAllocation({ budget, tier, api, auth, account, onApplied, 
   const operation = useRef<{ signature: string; id: string } | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const other = tier === "standard" ? "enhanced" : "standard";
-  const ceiling = budget.approvedCreditCeiling;
+  const ceiling = allocationCeiling(budget);
   const label = tier === "standard" ? "Standard" : "Enhanced";
   async function perform(action: (graph: GraphClient, signal: AbortSignal) => Promise<void>, interactive = false) {
     controller.current?.abort();
@@ -271,19 +251,22 @@ export function BudgetAllocation({ budget, tier, api, auth, account, onApplied, 
     }
   }
   return <div className="policy-editor">
-    <button type="button" className="secondary" disabled={disabled || busy || !ceiling} aria-expanded={editing} aria-controls={detailsId}
+    <button type="button" className="secondary" disabled={disabled || busy} aria-expanded={editing} aria-controls={detailsId}
       aria-label={`Edit ${label} policy limits`} onClick={() => {
         setEditing((value) => !value);
         if (!editing) void perform(loadLimits);
       }}>{editing ? "Close editor" : "Edit"}</button>
-    {!ceiling && <p className="small muted">An approved BU credit ceiling is required before editing policy limits.</p>}
+    {budget.approvedCreditCeiling === undefined && <p className="notice small">
+      {"Demo planning budget: \u00a35,000/month = 500,000 credits shared by Standard and Enhanced, assuming \u00a30.01 per credit. Not financial approval or a currency conversion."}
+      {" "}Existing Graph limits change only when you explicitly save.
+    </p>}
     <div id={detailsId} hidden={!editing}>
-    <p className="small muted">BU monthly ceiling: {ceiling === undefined ? "Unavailable" : format(ceiling)} Copilot Credits.
+    <p className="small muted">BU monthly ceiling: {format(ceiling)} Copilot Credits.
       The other policy's limits are left unchanged. This does not prevent separately authorized admin-center changes.</p>
     <form className="policy-limit-form" onSubmit={(event) => {
       event.preventDefault();
       void perform(async (graph, signal) => {
-        if (!ceiling || !loaded || monthly.trim() === "" || (!unlimited && perUser.trim() === "")) {
+        if (!loaded || monthly.trim() === "" || (!unlimited && perUser.trim() === "")) {
           throw new Error("Load the current limits and enter both values before saving.");
         }
         const credits = Number(monthly);
@@ -307,7 +290,7 @@ export function BudgetAllocation({ budget, tier, api, auth, account, onApplied, 
       });
     }}><fieldset disabled={disabled || busy || !loaded}><legend>{label} policy limits</legend>
       <label>Monthly allocation (credits)<input type="number" min="0" step="1"
-        max={ceiling && loaded ? Math.max(0, ceiling - loaded[other]) : undefined}
+        max={loaded ? Math.max(0, ceiling - loaded[other]) : undefined}
         required value={monthly} onChange={(event) => setMonthly(event.target.value)} /></label>
       <label>Per-user credit limit<input type="number" min="0" step="any" max={Number.MAX_SAFE_INTEGER}
         required={!unlimited} disabled={unlimited} value={perUser} onChange={(event) => setPerUser(event.target.value)} /></label>

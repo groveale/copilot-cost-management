@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Caller, Metadata, PolicyDefaults } from "../src/contracts.js";
 import { ApiError, metadataSchema } from "../src/model.js";
-import { checkAllocation, splitCredits, usdToCredits } from "../src/budget-math.js";
+import { allocationCeiling, checkAllocation, DEMO_MONTHLY_CREDIT_CEILING, splitCredits, usdToCredits } from "../src/budget-math.js";
 import { allocationSchema, buDecisionSchema, buSubmissionSchema, memberUpdateSchema, onboardingRecordSchema, resourceKeys, type BuDecision, type BuSubmission, type OnboardingRecord, type OnboardingStore } from "../src/onboarding.js";
 import { OnboardingService } from "../src/onboarding-service.js";
 
@@ -74,6 +74,15 @@ async function completed() {
   return service.update(admin, record.id, { action: "complete", verified: true, etag: record.etag, leaseId });
 }
 describe("USD planning conversion and approved ceiling", () => {
+  it("uses exactly 500K combined credits for the GBP 5K demo fallback without overriding recorded ceilings", () => {
+    expect(DEMO_MONTHLY_CREDIT_CEILING).toBe(500_000);
+    expect(allocationCeiling({})).toBe(500_000);
+    expect(allocationCeiling({ approvedCreditCeiling: undefined })).toBe(500_000);
+    expect(allocationCeiling({ approvedCreditCeiling: 2_000_000 })).toBe(2_000_000);
+    expect(allocationCeiling({ approvedCreditCeiling: 250_000 })).toBe(250_000);
+    expect(() => checkAllocation(250_000, 250_000, allocationCeiling({}))).not.toThrow();
+    expect(() => checkAllocation(250_000, 250_001, allocationCeiling({}))).toThrow("monthly ceiling");
+  });
   it("converts the exact required $20K example into two one-million-credit policies", () => {
     expect(usdToCredits("20000")).toBe(2_000_000);
     expect(splitCredits(usdToCredits("20000.00"))).toEqual({ standard: 1_000_000, enhanced: 1_000_000 });
@@ -167,6 +176,32 @@ describe("onboarding authorization and persistence", () => {
     await expect(service.allocation(owner, record.budgetId, { operationId: id(7), standard: 1_000_000, enhanced: 1_000_000 })).rejects.toMatchObject({ status: 409 });
     store.value!.budgets[0].owners = [other.objectId];
     await expect(service.update(owner, work!.id, { action: "claim", etag: work!.etag })).rejects.toMatchObject({ status: 404 });
+  });
+  it("allows legacy-BU edits without an approved allocation while enforcing and freezing the demo ceiling", async () => {
+    store.value = structuredClone(legal);
+    store.value.budgets[0].owners = [owner.objectId];
+    const metadata = structuredClone(store.value);
+    expect(await service.allocation(owner, "legal")).toBeNull();
+    await expect(service.allocation(other, "legal", { operationId: id(6), standard: 250_000, enhanced: 250_000 }))
+      .rejects.toMatchObject({ status: 404 });
+    await expect(service.allocation(owner, "legal", { operationId: id(6), standard: 250_000, enhanced: 250_001 }))
+      .rejects.toMatchObject({ status: 400, code: "invalid-allocation" });
+    const input = { operationId: id(6), standard: 250_000, enhanced: 250_000,
+      perUserEdit: { tier: "standard" as const, credits: 10000 } };
+    const saved = await service.allocation(owner, "legal", input);
+    expect(saved).toMatchObject({ id: "allocation-legal", approvedCredits: 500_000,
+      monthlyBudgetUsd: "", perUserEdit: input.perUserEdit });
+    expect(saved!.justification).toContain("GBP 5,000");
+    expect(saved!.justification).toContain("not financial approval or a currency conversion");
+    expect(store.value).toEqual(metadata);
+    expect((await service.get(owner, saved!.id)).approvedCredits).toBe(500_000);
+    const claimed = await service.update(owner, saved!.id, { action: "claim", etag: saved!.etag });
+    const completed = await service.update(owner, claimed.id, {
+      action: "complete", etag: claimed.etag, leaseId: claimed.lease!.id, verified: true,
+    });
+    expect(completed.status).toBe("completed");
+    expect(completed.approvedCredits).toBe(500_000);
+    expect(store.value).toEqual(metadata);
   });
   it("freezes a selected per-user edit and includes it in operation idempotency", async () => {
     const record = await completed();

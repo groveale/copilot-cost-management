@@ -74,6 +74,8 @@ describe("focused owner screens", () => {
     expect(limits).toContain("Per-user credit limit");
     expect(limits).toContain("Save policy limits");
     expect(limits).not.toContain('type="range"');
+    expect(limits).toContain("BU monthly ceiling: 2,000,000 Copilot Credits");
+    expect(limits).not.toContain("Demo planning budget:");
     const members = renderToStaticMarkup(<AddPolicyMember budget={budget} tier={tier} serviceId="cowork" api={api}
       auth={auth} account={account} disabled={false} onAdded={() => undefined} onBusyChange={onBusyChange} />);
     expect(members).toContain('aria-expanded="false"');
@@ -83,6 +85,24 @@ describe("focused owner screens", () => {
     expect(members).toContain("already in the other tier cannot be added");
     expect(token).not.toHaveBeenCalled(); expect(allocation).not.toHaveBeenCalled();
     expect(member).not.toHaveBeenCalled(); expect(onBusyChange).not.toHaveBeenCalled();
+  });
+  it.each(["standard", "enhanced"] as const)("enables the %s editor with the shared GBP 5K demo ceiling when no approval is recorded", (tier) => {
+    vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+    const api = new RequestApi("https://example.test", async () => "synthetic-token");
+    const allocation = vi.spyOn(api, "allocation");
+    const account = { tenantId: id(1), localAccountId: id(3), homeAccountId: "home",
+      environment: "login.microsoftonline.com", username: "owner@example.test" };
+    const html = renderToStaticMarkup(<BudgetAllocation budget={config.budgets[0]} tier={tier} api={api}
+      auth={new DemoAuth(config)} account={account} onApplied={() => undefined} onBusyChange={() => undefined} />);
+    const editButton = html.match(/<button[^>]*aria-label="Edit (?:Standard|Enhanced) policy limits"[^>]*>/)?.[0];
+    expect(editButton).toBeDefined();
+    expect(editButton).not.toContain("disabled");
+    expect(html).toContain("\u00a35,000/month = 500,000 credits shared by Standard and Enhanced");
+    expect(html).toContain("assuming \u00a30.01 per credit");
+    expect(html).toContain("Not financial approval or a currency conversion");
+    expect(html).toContain("BU monthly ceiling: 500,000 Copilot Credits");
+    expect(html).not.toContain("approved BU credit ceiling is required");
+    expect(allocation).not.toHaveBeenCalled();
   });
   it("lands on BU metadata without mounting Graph details, requests or setup forms", () => {
     const html = workspace({ page: "budgets" });

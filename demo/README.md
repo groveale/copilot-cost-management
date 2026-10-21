@@ -33,8 +33,8 @@ MSAL v5 redirect bridge and both HTML build entries are required.
   portal header. It switches the existing theme immediately and retains the
   selected theme while navigating views or signing in/out on the current page.
 - **Admin** is shown only after the API verifies administrator access. Direct
-  admin URLs do not grant access. **Setup requests** contains the review queue
-  and the explicitly enabled private JSON importer. **Spending policies**
+  admin URLs do not grant access. **Setup requests** contains the review queue;
+  the onboarding-administration intro/import card is not shown. **Spending policies**
   automatically reads every spending-policy page directly through delegated Graph,
   not just configured budgets. The inventory is read-only. Business unit,
   cost centre, tier and owner mappings come from private metadata; missing
@@ -152,11 +152,21 @@ Each policy has an **Edit** button opening numeric **Monthly allocation** and
 **Per-user credit limit** fields, not a slider. The editor reads fresh limits only
 when opened; **Save policy limits** creates a durable, resumable allocation plan.
 The other policy's current limits are preserved, and the combined monthly limits
-cannot exceed the BU's stored approved ceiling. Reduce one policy before increasing
+cannot exceed the BU's stored approved ceiling, or the demo ceiling below when
+that field is absent. Reduce one policy before increasing
 the other when reallocating a fully allocated budget. Per-user limits can be zero
 or explicitly Unlimited; per-user/billing settings on the other policy are not
 changed. Billing methods and onboarding defaults are not edited. Budgets without
-an approved ceiling show why limit editing is unavailable. Stale selected-policy
+an approved ceiling remain editable using a labelled **GBP 5,000/month demo
+ceiling: 500,000 credits combined** across Standard and Enhanced, assuming
+**GBP 0.01/credit**. This is not financial approval, a credit purchase, a USD
+conversion or an exchange rate. Explicit approved ceilings are preserved even
+when lower than the demo ceiling. Both UI and API use the same rule; the effective
+ceiling is frozen in each saved allocation operation. It does not seed or
+overwrite metadata or live Graph limits. Existing limits still require an
+explicit save and must satisfy the combined ceiling; external over-ceiling or
+unlimited policies require reconciliation rather than an automatic reset.
+Stale selected-policy
 values block saving; failed/partial edits expose **Resume saved policy edit**.
 
 **Add member**, beside **Members and consumption**, looks up an existing enabled
@@ -201,8 +211,9 @@ Fixed defaults live in private `metadata.onboardingDefaults` JSON:
 Standard has **10,000 credits per person** and Enhanced **25,000**, both
 `payAsYouGo` in the supplied seed example. These are per-person caps, not the
 pooled BU policy budgets. No limits/billing defaults are silently invented.
-Import the updated private seed through **Admin > Setup requests > Import private
-setup JSON** after deploying this version. Reimporting adds missing defaults
+An authorized operator can import the updated private seed through the explicitly
+enabled `POST /api/v1/onboarding/bootstrap` API after deploying this version;
+there is no importer in the portal UI. Reimporting adds missing defaults
 without resetting requests or changing existing budgets/Graph policies.
 A configuration-only seed with empty `budgets` and `requesterIndex` is also
 supported. Different existing defaults conflict rather than being overwritten.
@@ -219,7 +230,8 @@ spend or a purchase. Per-user caps/billing methods are reviewed independently.
 Progress and IDs are persisted; partial or uncertain outcomes are not reported
 as complete. Refresh/resume rather than submitting duplicates. New ownership is
 published after browser verification. Owners can then edit each policy within the
-stored approved ceiling, decreasing one tier before increasing the other.
+stored approved ceiling (or the labelled GBP 5K demo ceiling when missing),
+decreasing one tier before increasing the other.
 Separately authorized admin-center changes can bypass this application ceiling.
 Existing Legal resources, requester routing and allowance approvals are preserved.
 

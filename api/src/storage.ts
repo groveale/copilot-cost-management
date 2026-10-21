@@ -86,7 +86,7 @@ export class AzureStore implements Store {
     } catch (error) {
       if (isStorageNotFound(error, "BlobNotFound")) {
         throw new ApiError(409, "setup-required",
-          'Budget setup is not complete. Open "Policy owner" to request a new BU. An onboarding administrator can import the initial private JSON under "Admin" > "Setup requests", then refresh the workspace.');
+          'Budget setup is not complete. Open "Policy owner" to request a new BU. An onboarding administrator must configure the private setup metadata, then refresh the workspace.');
       }
       throw error;
     }
