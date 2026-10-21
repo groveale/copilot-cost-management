@@ -77,7 +77,7 @@ async function verifyGroup(graph: GraphClient, id: string, record: OnboardingRec
   const owners = await graph.list(`/v1.0/groups/${id}/owners`, signal);
   if (!owners.some((owner) => object(owner, "Group owner").id === record.requesterId)) throw new Error("The proposed BU owner is not an owner of the group.");
 }
-async function verifyAudience(graph: GraphClient, id: string, groupId: string, signal: AbortSignal) {
+export async function verifyAudience(graph: GraphClient, id: string, groupId: string, signal: AbortSignal) {
   const groups = await graph.list(`${base}/${id}/microsoft.graph.selectedGroupsSpendingPolicy/assignedGroups`, signal);
   if (groups.length !== 1 || object(groups[0], "Assigned group").id !== groupId) throw new Error("Policy group assignments differ from this BU.");
 }

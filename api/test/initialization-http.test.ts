@@ -4,6 +4,7 @@ import { ApiError } from "../src/model.js";
 import { AzureStore } from "../src/storage.js";
 import { OnboardingService } from "../src/onboarding-service.js";
 import { handler } from "../src/functions.js";
+import { RequestService } from "../src/service.js";
 
 vi.mock("../src/auth.js", () => ({
   createAuthenticator: () => async () => ({
@@ -57,4 +58,20 @@ it("returns setup-required as a structured 409, not a generic outage", async () 
   expect(await result.json()).toMatchObject({
     code: "setup-required", message: expect.stringContaining("Request a new BU"), correlationId: expect.any(String),
   });
+});
+it("authenticates and validates the fulfilment endpoint without accepting browser-supplied mappings", async () => {
+  const fulfil = vi.spyOn(RequestService.prototype, "fulfil").mockRejectedValue(new ApiError(409, "not-approved", "Approval required."));
+  const path = `requests/${"a".repeat(64)}/fulfilment`;
+  for (const [body, expected] of [
+    [{ action: "claim", etag: "specific" }, 409],
+    [{ action: "claim", etag: "specific", enhancedGroupId: process.env.TENANT_ID }, 400],
+    [{ action: "complete", etag: "specific" }, 400],
+  ] as const) {
+    const request = new HttpRequest({ url: `https://example.test/api/v1/${path}`, method: "POST", params: { path },
+      headers: { "content-type": "application/json" }, body: { string: JSON.stringify(body) } });
+    expect((await handler(request, new InvocationContext({ functionName: "test", logHandler: vi.fn() }))).status).toBe(expected);
+  }
+  expect(fulfil).toHaveBeenCalledExactlyOnceWith(
+    { tenantId: process.env.TENANT_ID, objectId: "10000000-0000-4000-8000-000000000004" }, "a".repeat(64), { action: "claim", etag: "specific" },
+  );
 });

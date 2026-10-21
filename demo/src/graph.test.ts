@@ -89,6 +89,19 @@ describe("direct Graph requests", () => {
     await expect(new GraphClient(token).get("/beta/data", controller.signal)).rejects.toThrow();
     expect(token).not.toHaveBeenCalled();
   });
+  it("deletes only an explicit group membership $ref and never the directory object", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    const token = vi.fn(async () => "t");
+    const client = new GraphClient(token, fetcher);
+    const path = "/v1.0/groups/10000000-0000-4000-8000-000000000001/members/10000000-0000-4000-8000-000000000002";
+    expect(() => client.deleteReference(path, signal())).toThrow("$ref");
+    expect(() => client.deleteReference(`${path}/$ref?unexpected=1`, signal())).toThrow("$ref");
+    expect(token).not.toHaveBeenCalled();
+    await client.deleteReference(`${path}/$ref`, signal());
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ method: "DELETE" });
+    expect(fetcher.mock.calls[0][1]?.body).toBeUndefined();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("parses both forms of Retry-After and falls back visibly through bounded retries", () => {
     expect(retryAfterMs("3", 0)).toBe(3000);
     expect(retryAfterMs("Thu, 01 Jan 2026 00:00:05 GMT", 0, Date.parse("2026-01-01T00:00:00Z"))).toBe(5000);

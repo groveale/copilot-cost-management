@@ -10,8 +10,8 @@
   private endpoints/DNS have ongoing charges even when the Function scales to zero.
 - Private JSON blob for budget/owner metadata; `RequesterBudgetIndex`,
   `Requests` and `OnboardingRequests` Tables. No Graph proxy or application
-  Graph permissions. New BU provisioning/allocation uses delegated Graph in
-  the administrator/owner browser.
+  Graph permissions. New BU provisioning/allocation and approved credit-request
+  membership moves use delegated Graph in the administrator/owner browser.
 - UK South Application Insights/Log Analytics; 30-day retention, sampling and a
   small workspace ingestion cap. These are **not hard spending caps**.
 - Function runtime uses its **system-assigned managed identity** for host state,
@@ -22,9 +22,11 @@
   Graph tokens, ID tokens or the Function's identity.
 - GitHub has separate infrastructure/application federated identities. The only
   deployment-token exception is the site-scoped **frontend-only SWA token**.
-- Allowance-increase approval records a decision; its Graph fulfilment is manual.
+- Allowance-increase approval records a decision and applies the mapped
+  Standard-to-Enhanced group move in the owner's browser. Temporary moves require
+  manual return to Standard; no expiry worker or automatic reversion is provided.
   BU onboarding approval is a separate real provisioning workflow. No notification,
-  expiry worker, automatic allowance changes, backups or recovery SLA.
+  backups or recovery SLA.
 
 ## Before provisioning
 
@@ -457,8 +459,18 @@ minimal `/api/health` reports **process liveness only**, not storage readiness.
    decisions return conflicts rather than overwriting each other.
 4. Confirm changed ownership/routing and expired temporary requests block
    decisions. Verify the captured exclusive UTC boundary.
-5. Verify Graph's existing live policy/groups/member/consumption views with the
-   owner's separately acquired Graph token. No approval should issue a Graph write.
+5. With an explicitly authorized demo user, verify **Approve and move to
+   Enhanced** adds/verifies Enhanced before removing Standard using `$ref`, and
+   confirms final direct/transitive membership before recording completion.
+   No policy limits, billing settings or directory user objects may be modified.
+   Verify **Apply Enhanced upgrade** for a legacy approval, partial failure and
+   uncertain-response retry without duplicate writes, an active/expired lease,
+   changed owner/routing/group mappings, and inherited membership requiring
+   administrator review. Loading/refreshing must not initiate membership writes.
+   Check both permanent and temporary requests: temporary moves show manual
+   return deadlines/overdue warnings, never promise automatic reversion, and
+   expired requests cannot authorize further membership writes.
+   Graph reads may lag behind verified membership changes. Rejection is API-only.
 6. Confirm signed-out privacy and account-switch cleanup in the browser. Test
    storage denial as an unprivileged identity, without credential fallback.
 7. Confirm Insights telemetry arrives with local ingestion auth disabled, and logs
@@ -502,6 +514,13 @@ Rollback by redeploying an older **compatible, tested** application commit.
 There are no Flex slots and no atomic API/frontend release guarantee. Use additive
 schema changes; unsupported request versions fail explicitly. Do not roll back or
 erase Tables with application code. Review infrastructure rollback with what-if.
+The optional request `fulfilment` field preserves legacy records but older strict
+readers cannot read newly upgraded records. Deploy the compatible API before
+using the new UI; do not roll back to a version that rejects this field.
+The API stores approval/progress and rechecks authorization using existing storage
+roles; Graph remains delegated browser execution with no new application
+permissions, proxy or background worker. A completed state is the authorized
+browser's verification report, not an independent server-side Graph attestation.
 
 LRS is redundancy, not backup or point-in-time restore. Take a private authorized
 export before destructive data work. No automatic backup/restore or recovery SLA

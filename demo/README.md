@@ -78,9 +78,32 @@ MSAL v5 redirect bridge and both HTML build entries are required.
 - Decisions use conditional ETags and recheck current ownership, routing,
   expiry. Owners **may approve their own requests in this MVP**; ownership is
   still required. Rejection requires 10-1000 characters.
-- Allowance-increase approval means **Approved - manual fulfilment required**.
-  That flow has no Graph writes, notifications, automatic expiry/reversion or
-  native Cowork actions. BU provisioning is the separate workflow below.
+- **Approve and move to Enhanced** first obtains the owner's delegated Graph
+  access and records approval, then applies the mapped group move. It verifies
+  both enabled policies, their single mapped group and enabled service, and that
+  groups are assigned/cloud-managed/non-role-assignable security groups.
+  Enhanced direct membership is added and verified **before** Standard direct
+  membership is removed using its `$ref`. Final direct and transitive checks
+  must confirm Enhanced without Standard before **Enhanced move applied** is
+  recorded. No policy caps, billing settings or user objects are changed.
+- Both permanent and temporary approvals apply this move. Temporary requests
+  require **manual return to Standard** at the recorded UTC boundary; the UI
+  flags overdue returns rather than implying that access expired automatically.
+  An authorized owner/admin must review actual memberships, restore/verify
+  Standard, then remove the appropriate Enhanced membership manually.
+  There is no scheduler, automatic reversion, notification or native Cowork action.
+- Request progress is durable in the existing Requests table. Five-minute leases
+  and conditional ETags coordinate attempts; before each membership mutation the
+  API rechecks current ownership, requester routing, frozen policy/group mappings
+  and temporary expiry. The trusted delegated browser reports verification;
+  the Function does not proxy Graph or independently attest to Graph membership.
+  No new Graph scopes, Graph application permissions or storage roles are added.
+- Existing approved requests expose **Apply Enhanced upgrade**; loading the page
+  never applies them automatically. Partial failures retain approval and expose
+  **Retry Enhanced upgrade**. Retry rereads real memberships and skips confirmed
+  writes, including after uncertain responses. Inherited tier membership blocks
+  automatic reconciliation. If a browser closes mid-attempt, wait for the lease
+  to expire, refresh and retry. Do not resubmit an already-approved request.
 - On an uncertain network outcome, refresh history before making a new request.
   Retrying the unchanged draft reuses its operation ID within the current page;
   reloading/switching account intentionally clears the draft and operation ID.
@@ -90,10 +113,11 @@ Owners automatically load Graph policy configuration, assigned groups, direct
 members and current user/service consumption for their selected budget. Admin
 inventory and approved-budget allocation limits also load on entry. Reads use
 MSAL's cached/silently renewed Graph token; refresh does not force a popup.
-**Grant Graph access** appears only when silent authentication requires user
-interaction, and only its explicit action may open a consent/sign-in popup.
+**Grant Graph access** appears only when an automatic read requires user
+interaction. Explicit provisioning, upgrade and allocation actions also preflight
+Graph access silently and may open a popup only when interaction is required.
 API tokens are never reused as Graph tokens; requester balance reads use the
-separate read-only scope subset described above. Provisioning, recovery and allocation writes require their
+separate read-only scope subset described above. Provisioning, upgrades, recovery and allocation writes require their
 own explicit actions, not background effects. The existing eight
 operator-selected delegated scopes are unchanged. Preview Graph APIs are for
 evaluation, not supported production applications. Nested membership expansion,

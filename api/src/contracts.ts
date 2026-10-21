@@ -18,6 +18,20 @@ export interface PolicyDefaults { standard: PolicyTierDefaults; enhanced: Policy
 export interface Metadata { version: 1; tenantId: string; serviceId: string; budgets: Budget[]; onboardingDefaults?: PolicyDefaults }
 export type GrantKind = "permanent" | "billingPeriod";
 export interface Submission { operationId: string; justification: string; grantKind: GrantKind }
+export interface Fulfilment {
+  state: "pending" | "applying" | "needs-attention" | "applied";
+  standard: Budget["tiers"]["standard"];
+  enhanced: Budget["tiers"]["enhanced"];
+  lease?: { id: string; actor: string; until: string };
+  appliedAt?: string;
+  appliedBy?: string;
+}
+export interface FulfilmentUpdate {
+  action: "claim" | "heartbeat" | "release" | "complete";
+  etag: string;
+  leaseId?: string;
+  verified?: true;
+}
 export interface RequestRecord extends Submission {
   version: 1;
   id: string;
@@ -30,6 +44,7 @@ export interface RequestRecord extends Submission {
   decisionBy?: string;
   decisionAt?: string;
   rejectionReason?: string;
+  fulfilment?: Fulfilment;
   etag: string;
 }
 export interface Route {

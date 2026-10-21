@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Caller, Metadata, Page, RequestRecord, Submission } from "../src/contracts.js";
-import { decisionSchema, seedSchema, submissionSchema } from "../src/model.js";
+import { decisionSchema, fulfilmentUpdateSchema, seedSchema, submissionSchema } from "../src/model.js";
 import { RequestService, type Store } from "../src/service.js";
 
 const id = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -31,7 +31,7 @@ class MemoryStore implements Store {
   }
   async replace(record: RequestRecord, etag: string) {
     if (this.records.get(record.id)?.etag !== etag) return false;
-    this.records.set(record.id, { ...structuredClone(record), etag: '"2"' });
+    this.records.set(record.id, { ...structuredClone(record), etag: `"${Number(etag.slice(1, -1)) + 1}"` });
     return true;
   }
   async list(tenant: string, requesterId?: string, budgets?: string[]): Promise<Page<RequestRecord>> {
@@ -135,6 +135,120 @@ describe("strict input boundary", () => {
     for (const field of ["requesterId", "tenantId", "budgetId", "approverId", "status", "expiresAt"]) {
       expect(submissionSchema.safeParse({ ...input, [field]: id(40) }).success).toBe(false);
     }
+  });
+
+  describe("durable Standard-to-Enhanced fulfilment", () => {
+    async function approved(permanent = true) {
+      const saved = await service.submit(requester, { ...input, ...(permanent ? { grantKind: "permanent" as const } : {}) });
+      return service.decide(owner, saved.id, { status: "approved", etag: saved.etag });
+    }
+    async function claim(record: RequestRecord) {
+      return service.fulfil(owner, record.id, { action: "claim", etag: record.etag });
+    }
+    it.each([true, false])("freezes the server's policy/group mapping for permanent=%s", async (permanent) => {
+      const record = await approved(permanent);
+      expect(record.fulfilment).toEqual({ state: "pending", ...metadata.budgets[0].tiers });
+      expect((await service.history(requester)).items[0]).toEqual(record);
+    });
+    it("does not allow a requester, another tenant or a non-owner to apply an approval", async () => {
+      const record = await approved();
+      for (const caller of [requester, { ...owner, tenantId: id(80) }, { ...owner, objectId: id(80) }]) {
+        await expect(service.fulfil(caller, record.id, { action: "claim", etag: record.etag })).rejects.toMatchObject({ status: 404 });
+      }
+    });
+    it("does not apply pending or rejected requests", async () => {
+      const record = await service.submit(requester, input);
+      await expect(claim(record)).rejects.toMatchObject({ code: "not-approved" });
+      const rejected = await service.decide(owner, record.id, { status: "rejected", reason: "No additional capacity needed.", etag: record.etag });
+      await expect(claim(rejected)).rejects.toMatchObject({ code: "not-approved" });
+    });
+    it("allows explicit fulfilment of a legacy approved record without changing its decision", async () => {
+      const record = await approved();
+      delete record.fulfilment;
+      store.records.set(record.id, structuredClone(record));
+      const started = await claim(record);
+      expect(started.fulfilment).toMatchObject({ state: "applying", standard: metadata.budgets[0].tiers.standard });
+      expect(started.decisionAt).toBe(record.decisionAt);
+    });
+    it("grants only one concurrent lease and rejects stale updates", async () => {
+      const record = await approved();
+      const outcomes = await Promise.allSettled([claim(record), claim(record)]);
+      expect(outcomes.filter((value) => value.status === "fulfilled")).toHaveLength(1);
+      const current = (await service.history(requester)).items[0];
+      await expect(claim(current)).rejects.toMatchObject({ code: "fulfilment-busy" });
+      await expect(service.fulfil(owner, current.id, { action: "complete", etag: record.etag, leaseId: current.fulfilment!.lease!.id, verified: true }))
+        .rejects.toMatchObject({ code: "fulfilment-conflict" });
+    });
+    it("renews before writes, verifies completion and preserves an idempotent completed result", async () => {
+      let record = await claim(await approved());
+      const leaseId = record.fulfilment!.lease!.id;
+      const original = record.fulfilment!.lease!.until;
+      now = new Date(now.getTime() + 60_000);
+      record = await service.fulfil(owner, record.id, { action: "heartbeat", etag: record.etag, leaseId });
+      expect(Date.parse(record.fulfilment!.lease!.until)).toBeGreaterThan(Date.parse(original));
+      await expect(service.fulfil(owner, record.id, { action: "complete", etag: record.etag, leaseId })).rejects.toMatchObject({ code: "verification-required" });
+      record = await service.fulfil(owner, record.id, { action: "complete", etag: record.etag, leaseId, verified: true });
+      expect(record.fulfilment).toMatchObject({ state: "applied", appliedBy: owner.objectId, appliedAt: now.toISOString() });
+      expect(record.fulfilment?.lease).toBeUndefined();
+      expect(await service.fulfil(owner, record.id, { action: "claim", etag: "stale" })).toEqual(record);
+    });
+    it("permits release after a failure and retries with a new lease", async () => {
+      let record = await claim(await approved());
+      const oldLease = record.fulfilment!.lease!.id;
+      record = await service.fulfil(owner, record.id, { action: "release", etag: record.etag, leaseId: oldLease });
+      expect(record.fulfilment?.state).toBe("needs-attention");
+      record = await claim(record);
+      expect(record.fulfilment?.lease?.id).not.toBe(oldLease);
+      await expect(service.fulfil(owner, record.id, { action: "release", etag: record.etag, leaseId: oldLease })).rejects.toMatchObject({ code: "fulfilment-lease" });
+    });
+    it("recovers a closed-browser lease only after expiry and rejects its old worker", async () => {
+      let record = await claim(await approved());
+      const oldLease = record.fulfilment!.lease!.id;
+      now = new Date(record.fulfilment!.lease!.until);
+      record = await claim(record);
+      expect(record.fulfilment?.lease?.id).not.toBe(oldLease);
+      await expect(service.fulfil(owner, record.id, { action: "complete", etag: record.etag, leaseId: oldLease, verified: true }))
+        .rejects.toMatchObject({ code: "fulfilment-lease" });
+    });
+    it("rechecks ownership, requester routing and frozen mappings before a write heartbeat", async () => {
+      const record = await claim(await approved());
+      const update = { action: "heartbeat" as const, etag: record.etag, leaseId: record.fulfilment!.lease!.id };
+      store.config.budgets[0].owners = [id(80)];
+      await expect(service.fulfil(owner, record.id, update)).rejects.toMatchObject({ status: 404 });
+      store.config.budgets[0].owners = [owner.objectId];
+      store.index.delete(requester.objectId);
+      await expect(service.fulfil(owner, record.id, update)).rejects.toMatchObject({ code: "needs-routing" });
+      store.index.set(requester.objectId, "legal");
+      store.config.budgets[0].tiers.enhanced.groupId = id(88);
+      await expect(service.fulfil(owner, record.id, update)).rejects.toMatchObject({ code: "fulfilment-mapping-changed" });
+    });
+    it("prevents new claims and writes at the temporary expiry boundary, while retaining reviewable partial state", async () => {
+      let record = await claim(await approved(false));
+      const leaseId = record.fulfilment!.lease!.id;
+      now = new Date(record.expiresAt!);
+      await expect(service.fulfil(owner, record.id, { action: "heartbeat", etag: record.etag, leaseId })).rejects.toMatchObject({ code: "expired" });
+      record = await service.fulfil(owner, record.id, { action: "release", etag: record.etag, leaseId });
+      expect(record.fulfilment?.state).toBe("needs-attention");
+      await expect(claim(record)).rejects.toMatchObject({ code: "expired" });
+    });
+    it("can record an already-verified move just after the temporary boundary without authorizing further writes", async () => {
+      const record = await claim(await approved(false));
+      now = new Date(record.expiresAt!);
+      const completed = await service.fulfil(owner, record.id, {
+        action: "complete", etag: record.etag, leaseId: record.fulfilment!.lease!.id, verified: true,
+      });
+      expect(completed.fulfilment?.state).toBe("applied");
+      expect(completed.expiresAt).toBe(record.expiresAt);
+    });
+    it("accepts only specific ETags, current lease IDs and explicit completion verification", () => {
+      expect(fulfilmentUpdateSchema.safeParse({ action: "claim", etag: "e" }).success).toBe(true);
+      for (const update of [
+        { action: "claim", etag: "*" }, { action: "complete", etag: "e" },
+        { action: "complete", etag: "e", leaseId: id(40) },
+        { action: "claim", etag: "e", enhancedGroupId: id(40) },
+        { action: "claim", etag: "e", requesterId: id(40) },
+      ]) expect(fulfilmentUpdateSchema.safeParse(update).success).toBe(false);
+    });
   });
   it("enforces exact justification and rejection thresholds", () => {
     for (const length of [19, 2001]) expect(submissionSchema.safeParse({ ...input, justification: "x".repeat(length) }).success).toBe(false);

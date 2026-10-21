@@ -5,6 +5,23 @@ export const uuid = z.uuid().transform((value) => value.toLowerCase()).refine(
   (value) => value !== "00000000-0000-0000-0000-000000000000", "A non-zero UUID is required.",
 );
 const tier = z.object({ policyId: uuid, groupId: uuid }).strict();
+export const fulfilmentSchema = z.object({
+  state: z.enum(["pending", "applying", "needs-attention", "applied"]),
+  standard: tier, enhanced: tier,
+  lease: z.object({ id: uuid, actor: uuid, until: z.iso.datetime() }).strict().optional(),
+  appliedAt: z.iso.datetime().optional(), appliedBy: uuid.optional(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.state === "applying") !== !!value.lease ||
+      (value.state === "applied" && (!value.appliedAt || !value.appliedBy))) {
+    ctx.addIssue({ code: "custom", message: "Invalid fulfilment state." });
+  }
+});
+export const fulfilmentUpdateSchema = z.object({
+  action: z.enum(["claim", "heartbeat", "release", "complete"]),
+  etag: z.string().min(1).max(256).refine((value) => value !== "*"),
+  leaseId: uuid.optional(), verified: z.literal(true).optional(),
+}).strict().refine((value) => value.action === "claim" || !!value.leaseId, "An active lease is required.")
+  .refine((value) => value.action !== "complete" || value.verified === true, "Browser verification is required.");
 export const policySettingsSchema = z.object({
   perUserCredits: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
   billingMethods: z.enum(["notSpecified", "prepaidCredits", "payAsYouGo", "prepaidCredits,payAsYouGo"]),

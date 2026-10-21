@@ -59,21 +59,28 @@ export class GraphClient {
   getWithEtag(path: string, signal: AbortSignal) { return this.request("GET", path, signal); }
   post(path: string, body: unknown, signal: AbortSignal, etag?: string) { return this.request("POST", path, signal, body, etag); }
   patch(path: string, body: unknown, signal: AbortSignal, etag: string) { return this.request("PATCH", path, signal, body, etag); }
-  private request(method: "GET" | "POST" | "PATCH", path: string, signal: AbortSignal, body?: unknown, etag?: string) {
+  deleteReference(path: string, signal: AbortSignal) {
+    const url = new URL(graphUrl(path));
+    if (!/^\/v1\.0\/groups\/[a-f0-9-]{36}\/members\/[a-f0-9-]{36}\/\$ref$/.test(url.pathname) || url.search) {
+      throw new Error("Only an explicit group-member $ref may be deleted; directory objects must never be deleted.");
+    }
+    return this.request("DELETE", path, signal);
+  }
+  private request(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, signal: AbortSignal, body?: unknown, etag?: string) {
     const result = this.tail.then(() => this.send(method, path, signal, body, etag));
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  private async send(method: "GET" | "POST" | "PATCH", path: string, signal: AbortSignal, body?: unknown, etag?: string): Promise<{ data: unknown; etag: string | null }> {
+  private async send(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, signal: AbortSignal, body?: unknown, etag?: string): Promise<{ data: unknown; etag: string | null }> {
     const url = graphUrl(path);
     for (let attempt = 0; ; attempt++) {
       signal.throwIfAborted();
       const token = await this.token();
       const response = await this.fetcher(url, {
-        ...(method === "GET" ? {} : { method, body: JSON.stringify(body) }),
+        ...(method === "GET" ? {} : { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json",
-          ...(method === "GET" ? {} : { "Content-Type": "application/json" }), ...(etag ? { "If-Match": etag } : {}) },
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...(etag ? { "If-Match": etag } : {}) },
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
         redirect: "error",
         cache: "no-store",

@@ -1,4 +1,4 @@
-import type { Context, Decision, Page, RequestRecord, Submission } from "../../api/src/contracts";
+import type { Context, Decision, FulfilmentUpdate, Page, RequestRecord, Submission } from "../../api/src/contracts";
 import type { Metadata } from "../../api/src/contracts";
 import type { BuDecision, BuSubmission, OnboardingRecord, WorkUpdate } from "../../api/src/onboarding";
 export type { Context, Decision, Page, RequestRecord, Submission };
@@ -33,6 +33,9 @@ export class RequestApi {
   submit(input: Submission, signal: AbortSignal): Promise<RequestRecord> { return this.call("requests", signal, input); }
   decide(id: string, input: Decision, signal: AbortSignal): Promise<RequestRecord> {
     return this.call(`requests/${id}/decision`, signal, input);
+  }
+  fulfilment(id: string, input: FulfilmentUpdate, signal: AbortSignal): Promise<RequestRecord> {
+    return this.call(`requests/${id}/fulfilment`, signal, input);
   }
   onboardingCapabilities(signal: AbortSignal): Promise<OnboardingCapabilities> { return this.call("onboarding/capabilities", signal); }
   onboardingList(signal: AbortSignal, inbox = false, cursor?: string): Promise<Page<OnboardingRecord>> {

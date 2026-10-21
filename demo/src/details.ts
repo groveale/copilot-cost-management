@@ -53,7 +53,7 @@ function entity(value: unknown, label: string, expectedId?: string): Entity {
   return { id, fields };
 }
 
-async function serviceRows(graph: GraphClient, path: string, signal: AbortSignal): Promise<Fields[]> {
+export async function serviceRows(graph: GraphClient, path: string, signal: AbortSignal): Promise<Fields[]> {
   const response = object(await graph.get(path, signal), "Service response");
   let rows: unknown[];
   if (Array.isArray(response.value)) {

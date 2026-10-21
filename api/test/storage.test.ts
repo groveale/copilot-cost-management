@@ -130,6 +130,20 @@ describe("Azure Table persistence adapter", () => {
       payload: JSON.stringify(Object.fromEntries(Object.entries(request).filter(([key]) => key !== "etag"))),
     });
   });
+  it("round-trips durable fulfilment state while continuing to read legacy requests", async () => {
+    const upgraded: RequestRecord = { ...request, status: "approved", fulfilment: {
+      state: "applied", standard: { policyId: id, groupId: id }, enhanced: { policyId: id, groupId: id },
+      appliedAt: "2026-01-01T00:00:00Z", appliedBy: id,
+    } };
+    for (const value of [request, upgraded]) {
+      const { etag, ...payload } = value;
+      sdk.getEntity.mockResolvedValue({ payload: JSON.stringify(payload), etag });
+      expect(await store().get(id, request.id)).toEqual(value);
+    }
+    const { etag, ...payload } = upgraded;
+    sdk.getEntity.mockResolvedValue({ payload: JSON.stringify({ ...payload, fulfilment: { ...payload.fulfilment, appliedAt: undefined } }), etag });
+    await expect(store().get(id, request.id)).rejects.toThrow();
+  });
   describe("private onboarding storage", () => {
       it("permits missing metadata only for BlobNotFound, not denied storage or a missing container", async () => {
         sdk.download.mockRejectedValue({ statusCode: 404, code: "BlobNotFound" });

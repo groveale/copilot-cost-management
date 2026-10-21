@@ -3,7 +3,7 @@ import { BlobServiceClient, type BlockBlobClient } from "@azure/storage-blob";
 import { AzureCliCredential, ManagedIdentityCredential, type TokenCredential } from "@azure/identity";
 import { z } from "zod";
 import type { Caller, Metadata, Page, RequestRecord } from "./contracts.js";
-import { ApiError, parseMetadata, validateStoredRequest } from "./model.js";
+import { ApiError, fulfilmentSchema, parseMetadata, validateStoredRequest } from "./model.js";
 import type { Store } from "./service.js";
 
 export function credential(): TokenCredential {
@@ -58,6 +58,7 @@ const storedSchema = z.object({
   createdAt: z.iso.datetime(), expiresAt: z.iso.datetime().nullable(),
   status: z.enum(["pending", "approved", "rejected"]),
   decisionBy: z.uuid().optional(), decisionAt: z.iso.datetime().optional(), rejectionReason: z.string().optional(),
+  fulfilment: fulfilmentSchema.optional(),
 }).strict();
 function record(entity: TableEntityResult<Record<string, unknown>>): RequestRecord {
   if (typeof entity.payload !== "string" || !entity.etag) throw new Error("Invalid stored request entity.");

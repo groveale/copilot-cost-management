@@ -2,7 +2,7 @@ import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } 
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import { createAuthenticator } from "./auth.js";
-import { ApiError, decisionSchema, seedSchema, submissionSchema, uuid } from "./model.js";
+import { ApiError, decisionSchema, fulfilmentUpdateSchema, seedSchema, submissionSchema, uuid } from "./model.js";
 import { RequestService } from "./service.js";
 import { AzureStore, credential, required, storageErrorCode } from "./storage.js";
 import { allocationSchema, buDecisionSchema, buSubmissionSchema, workUpdateSchema } from "./onboarding.js";
@@ -76,6 +76,8 @@ export async function handler(request: HttpRequest, context: InvocationContext):
     else if (path === "inbox" && request.method === "GET") result = await service.inbox(caller, cursor);
     else if (/^requests\/[a-f0-9]{64}\/decision$/.test(path) && request.method === "POST") {
       result = await service.decide(caller, path.split("/")[1], await body(request, decisionSchema));
+    } else if (/^requests\/[a-f0-9]{64}\/fulfilment$/.test(path) && request.method === "POST") {
+      result = await service.fulfil(caller, path.split("/")[1], await body(request, fulfilmentUpdateSchema));
     } else throw new ApiError(404, "not-found", "API endpoint not found.");
     // Functions treats jsonBody: null as absent, but nullable endpoints promise JSON null.
     if (result === null) return { status: 200, headers: { ...headers, "Content-Type": "application/json" }, body: "null" };

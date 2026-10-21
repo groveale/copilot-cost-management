@@ -10,10 +10,9 @@ import { BusinessUnitOnboarding, BudgetAllocation } from "./Onboarding";
 import { AdminPolicies } from "./AdminPolicies";
 import { PersonalBalance } from "./PersonalBalance";
 import { ThemeToggle } from "./ThemeToggle";
+import { requestStatusLabel as statusLabel, runFulfilment } from "./fulfilment";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-const statusLabel = (record: RequestRecord) => record.status === "approved" ? "Approved - manual fulfilment required" :
-  record.status === "rejected" ? "Rejected" : record.expiresAt && Date.parse(record.expiresAt) <= Date.now() ? "Expired / not approved" : "Pending owner decision";
 
 export type PortalView = "admin" | "owner" | "request";
 export function portalView(search: string): PortalView {
@@ -42,8 +41,10 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
   const [capabilityError, setCapabilityError] = useState("");
   const [context, setContext] = useState<Context | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [graphRefresh, setGraphRefresh] = useState(0);
   const api = useMemo(() => new RequestApi(config.apiBaseUrl ?? "", () => auth.apiToken(account)), [auth, config.apiBaseUrl, account]);
   const onPublished = useCallback(() => setRefresh((value) => value + 1), []);
+  const onUpgradeApplied = useCallback(() => setGraphRefresh((value) => value + 1), []);
   useEffect(() => {
     const onPopState = () => setView(portalView(window.location.search));
     window.addEventListener("popstate", onPopState);
@@ -134,13 +135,15 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
       auth={auth} account={account} serviceId={config.serviceId} />}
     {view !== "admin" && !context && !error && <p role="status">Loading your authorized workspace...</p>}
     {view !== "admin" && context && <>
-      <div className="notice">Credit-increase approval records a decision only. It does not change a policy, allowance or group membership.
-        Owners may approve their own requests in this MVP. Temporary increases use the UTC calendar month for this demo; no automatic reversion is scheduled.</div>
+      <div className="notice">Credit-increase approval applies a Standard-to-Enhanced group move using the owner's delegated Graph access.
+        Failed or partial upgrades require explicit retry. Owners may approve their own requests in this MVP.
+        Temporary increases use the UTC calendar month and require manual return to Standard; no automatic reversion is scheduled.</div>
       {view === "request" ? <SubmissionForm api={api} context={context} /> : <>
         {!context.ownedBudgets.length ? <section className="card"><h2>Set up your first spending budget</h2>
           <p>Request a new business unit below. An administrator must approve the budget before Standard and Enhanced policies are created.
             If you already manage a policy, ask the administrator to check its owner mapping. No Graph data has been requested.</p></section> :
-          <><RequestList api={api} inbox /><OwnerGraph budgets={context.ownedBudgets} serviceId={context.serviceId} auth={auth} account={account} api={api} /></>}
+          <><RequestList api={api} inbox auth={auth} account={account} serviceId={context.serviceId} onUpgradeApplied={onUpgradeApplied} />
+            <OwnerGraph budgets={context.ownedBudgets} serviceId={context.serviceId} auth={auth} account={account} api={api} refresh={graphRefresh} /></>}
       </>}
     </>}
     {view === "owner" && <details className="card setup-panel" open={!context?.ownedBudgets.length}>
@@ -191,16 +194,20 @@ function SubmissionForm({ api, context }: { api: RequestApi; context: Context })
           <label className="radio-choice"><input type="radio" name="duration" checked={grantKind === "billingPeriod"} onChange={() => setGrantKind("billingPeriod")} />Rest of this billing period (demo: UTC calendar month)</label>
           <label className="radio-choice"><input type="radio" name="duration" checked={grantKind === "permanent"} onChange={() => setGrantKind("permanent")} />Permanent increase</label>
         </fieldset>
+        {grantKind === "billingPeriod" && <p className="small muted">An owner or administrator must manually return you to Standard at period-end. This demo does not schedule automatic reversion.</p>}
         <button disabled={busy || context.route.state !== "ready"}>{busy ? "Saving request..." : "Submit request"}</button>
       </form>
       {error && <p className="error" role="alert">{error}</p>}
-      {saved && <p role="status">Request saved: {saved.id}. {statusLabel(saved)}. No allowance has changed.</p>}
+      {saved && <p role="status">Request saved: {saved.id}. {statusLabel(saved)}. An owner must approve and apply the upgrade.</p>}
     </section>
     <RequestList key={refresh} api={api} />
   </>;
 }
 
-function RequestList({ api, inbox = false }: { api: RequestApi; inbox?: boolean }) {
+function RequestList({ api, inbox = false, auth, account, serviceId, onUpgradeApplied }: {
+  api: RequestApi; inbox?: boolean; auth?: DemoAuth; account?: AccountInfo; serviceId?: string;
+  onUpgradeApplied?: () => void;
+}) {
   const [page, setPage] = useState<Page<RequestRecord>>({ items: [] });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -221,14 +228,18 @@ function RequestList({ api, inbox = false }: { api: RequestApi; inbox?: boolean 
     {error && <p className="error" role="alert">{error}</p>}
     {busy && <p role="status">Loading requests...</p>}
     {!busy && !error && !page.items.length && <p>No requests found.</p>}
-    {page.items.map((record) => <RequestCard key={`${record.id}:${record.etag}`} record={record} api={api} inbox={inbox}
+    {page.items.map((record) => <RequestCard key={record.id} record={record} api={api} inbox={inbox}
+      auth={auth} account={account} serviceId={serviceId}
+      onUpgradeApplied={onUpgradeApplied}
       onDecision={(saved) => setPage((prev) => ({ ...prev, items: prev.items.map((r) => r.id === saved.id ? saved : r) }))} />)}
     {page.cursor && <button disabled={busy} onClick={() => void load(page.cursor)}>Load more requests</button>}
   </section>;
 }
 
-function RequestCard({ record, api, inbox, onDecision }: {
+export function RequestCard({ record, api, inbox, onDecision, auth, account, serviceId, onUpgradeApplied }: {
   record: RequestRecord; api: RequestApi; inbox: boolean; onDecision: (record: RequestRecord) => void;
+  auth?: DemoAuth; account?: AccountInfo; serviceId?: string;
+  onUpgradeApplied?: () => void;
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -238,13 +249,32 @@ function RequestCard({ record, api, inbox, onDecision }: {
   async function decide(status: "approved" | "rejected") {
     setBusy(true); setError("");
     const current = new AbortController(); controller.current = current;
+    let approved = record.status === "approved";
     try {
-      const saved = await api.decide(record.id, { status, etag: record.etag, ...(status === "rejected" ? { reason } : {}) }, current.signal);
-      if (!current.signal.aborted) onDecision(saved);
-    } catch (error) { if (!current.signal.aborted) setError(message(error)); }
+      if (status === "rejected") {
+        const saved = await api.decide(record.id, { status, etag: record.etag, reason }, current.signal);
+        if (!current.signal.aborted) onDecision(saved);
+      } else {
+        if (!auth || !account || !serviceId) throw new Error("Owner Graph access is not configured. Refresh the owner workspace.");
+        await auth.consentGraph(account);
+        current.signal.throwIfAborted();
+        let saved = record;
+        if (!approved) {
+          saved = await api.decide(record.id, { status: "approved", etag: record.etag }, current.signal);
+          approved = true;
+          if (!current.signal.aborted) onDecision(saved);
+        }
+        await runFulfilment(api, new GraphClient(() => auth.token(account)), saved, serviceId, current.signal,
+          (value) => { if (!current.signal.aborted) onDecision(value); });
+        if (!current.signal.aborted) onUpgradeApplied?.();
+      }
+    } catch (error) {
+      if (!current.signal.aborted) setError(`${approved ? "Approval is saved, but the upgrade is not confirmed. Refresh and retry. " : ""}${message(error)}`);
+    }
     finally { if (!current.signal.aborted) setBusy(false); }
   }
   const expired = !!record.expiresAt && Date.parse(record.expiresAt) <= Date.now();
+  const activeLease = !!record.fulfilment?.lease && Date.parse(record.fulfilment.lease.until) > Date.now();
   return <article className="card"><h3>{statusLabel(record)}</h3>
     <dl><dt>Request</dt><dd className="mono">{record.id}</dd><dt>Budget</dt><dd>{record.budgetId}</dd>
       {inbox && <><dt>Requester object ID</dt><dd className="mono">{record.requesterId}</dd></>}
@@ -253,18 +283,27 @@ function RequestCard({ record, api, inbox, onDecision }: {
     <p className="justification">{record.justification}</p>
     {record.rejectionReason && <p>Rejection reason: {record.rejectionReason}</p>}
     {record.decisionAt && <p className="small muted">Decision recorded {record.decisionAt}</p>}
+    {record.fulfilment?.appliedAt && <p className="small muted">Group move verified by the delegated browser {record.fulfilment.appliedAt}. Policy/balance updates may take time to propagate.</p>}
+    {record.status === "approved" && record.expiresAt && <p className="notice">Manual return to Standard {expired ? "is overdue" : "is required"} at {record.expiresAt}.
+      No automatic reversion is scheduled. Review actual membership before making the return.</p>}
+    {record.fulfilment?.lease && <p className="small muted">Upgrade attempt lease until {record.fulfilment.lease.until}. If the browser was closed, wait for the lease to expire, refresh and retry.</p>}
     {inbox && record.status === "pending" && !expired && <div className="request-form">
       <label htmlFor={`reason-${record.id}`}>Reason if rejecting (10-1000 characters)</label>
       <textarea id={`reason-${record.id}`} value={reason} maxLength={1000} disabled={busy} onChange={(e) => setReason(e.target.value)} />
-      <div className="actions"><button disabled={busy} onClick={() => void decide("approved")}>Approve / manual fulfilment</button>
+      <div className="actions"><button disabled={busy} onClick={() => void decide("approved")}>Approve and move to Enhanced</button>
         <button className="secondary" disabled={busy || reason.trim().length < 10} onClick={() => void decide("rejected")}>Reject</button></div>
     </div>}
+    {inbox && record.status === "approved" && record.fulfilment?.state !== "applied" && !expired &&
+      <button disabled={busy || activeLease} onClick={() => void decide("approved")}>
+        {record.fulfilment?.state === "needs-attention" ? "Retry Enhanced upgrade" : "Apply Enhanced upgrade"}
+      </button>}
     {error && <p className="error" role="alert">{error}</p>}
   </article>;
 }
 
-function OwnerGraph({ budgets, serviceId, auth, account, api }: {
+function OwnerGraph({ budgets, serviceId, auth, account, api, refresh }: {
   budgets: BudgetConfig[]; serviceId: string; auth: DemoAuth; account: AccountInfo; api: RequestApi;
+  refresh: number;
 }) {
   const [budgetId, setBudgetId] = useState(budgets[0]?.id ?? "");
   const [snapshot, setSnapshot] = useState<BudgetSnapshot | null>(null);
@@ -277,7 +316,7 @@ function OwnerGraph({ budgets, serviceId, auth, account, api }: {
   useEffect(() => {
     void load();
     return () => controller.current?.abort();
-  }, [budget, auth, account]);
+  }, [budget, auth, account, refresh]);
   async function load(interactive = false) {
     if (!budget) return;
     controller.current?.abort();
