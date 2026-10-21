@@ -44,3 +44,34 @@ test("workflow credentials stay separated and untrusted PRs never deploy", async
   assert.match(infra, /what-if/); assert.match(infra, /environment: demo-infra/);
   assert.match(infra, /download-artifact@[a-f0-9]{40}/);
 });
+test("onboarding keeps admin configuration private and storage writes narrowly scoped", async () => {
+  const main = await read("infra/main.bicep");
+  assert.match(main, /@secure\(\)[\s\S]*?param onboardingAdminObjectIds string = ''/);
+  assert.match(main, /param bootstrapEnabled bool = false/);
+  assert.match(main, /name: 'OnboardingRequests'/);
+  const access = await read("infra/access.bicep");
+  assert.match(access, /scope: onboarding/);
+  assert.match(access, /scope: metadata/);
+  const workflow = await read(".github/workflows/infra.yml");
+  assert.match(workflow, /secrets\.ONBOARDING_ADMIN_OBJECT_IDS/);
+  assert.match(workflow, /test "\$actual" = "\$\(cat deployment\/admin-config.sha256\)"/);
+  assert.doesNotMatch(workflow, /tee deployment\/whatif/);
+  const publicConfig = JSON.parse(await read("demo/public/demo-config.json"));
+  assert.deepEqual(publicConfig.budgets, []);
+  assert.equal(publicConfig.ONBOARDING_ADMIN_OBJECT_IDS, undefined);
+});
+test("deployment federation uses the immutable repository prefix and exact environments", async () => {
+  const bootstrap = await read("infra/bootstrap.bicep");
+  const prefix = bootstrap.match(/param repositorySubjectPrefix string = '([^']+)'/)?.[1];
+  assert.equal(prefix, "repo:groveale@17550498/copilot-cost-management@1427172317");
+  const subjects = [...bootstrap.matchAll(/subject: '([^']+)'/g)]
+    .map((match) => match[1].replace("${repositorySubjectPrefix}", prefix));
+  assert.deepEqual(subjects, [
+    `${prefix}:environment:demo-whatif`,
+    `${prefix}:environment:demo-infra`,
+    `${prefix}:environment:demo`,
+  ]);
+  assert.equal((bootstrap.match(/issuer: 'https:\/\/token.actions.githubusercontent.com'/g) ?? []).length, 3);
+  assert.equal((bootstrap.match(/audiences: \[ 'api:\/\/AzureADTokenExchange' \]/g) ?? []).length, 3);
+  assert.doesNotMatch(bootstrap, /claimsMatchingExpression|subject: '[^']*\*/);
+});

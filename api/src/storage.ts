@@ -1,5 +1,5 @@
 import { TableClient, odata, type TableEntityResult } from "@azure/data-tables";
-import { BlobServiceClient } from "@azure/storage-blob";
+import { BlobServiceClient, type BlockBlobClient } from "@azure/storage-blob";
 import { AzureCliCredential, ManagedIdentityCredential, type TokenCredential } from "@azure/identity";
 import { z } from "zod";
 import type { Caller, Metadata, Page, RequestRecord } from "./contracts.js";
@@ -14,6 +14,19 @@ export function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing required setting: ${name}.`);
   return value;
+}
+export async function readMetadata(blob: BlockBlobClient, tenantId: string) {
+  const response = await blob.download();
+  if (!response.readableStreamBody || !response.etag) throw new Error("Metadata blob has no content or ETag.");
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of response.readableStreamBody) {
+    const buffer = Buffer.from(chunk);
+    length += buffer.length;
+    if (length > 1_048_576) throw new Error("Metadata exceeds the 1 MiB demo limit.");
+    chunks.push(buffer);
+  }
+  return { metadata: parseMetadata(JSON.parse(Buffer.concat(chunks).toString("utf8")), tenantId), etag: response.etag };
 }
 function status(error: unknown, code: number): boolean {
   return typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === code;
@@ -51,17 +64,7 @@ export class AzureStore implements Store {
     this.blobs = new BlobServiceClient(blobUrl, token);
   }
   async metadata(): Promise<Metadata> {
-    const response = await this.blobs.getContainerClient("metadata").getBlobClient("budgets.json").download();
-    if (!response.readableStreamBody) throw new Error("Metadata blob has no content.");
-    const chunks: Buffer[] = [];
-    let length = 0;
-    for await (const chunk of response.readableStreamBody) {
-      const buffer = Buffer.from(chunk);
-      length += buffer.length;
-      if (length > 1_048_576) throw new Error("Metadata exceeds the 1 MiB demo limit.");
-      chunks.push(buffer);
-    }
-    return parseMetadata(JSON.parse(Buffer.concat(chunks).toString("utf8")), this.tenantId);
+    return (await readMetadata(this.blobs.getContainerClient("metadata").getBlockBlobClient("budgets.json"), this.tenantId)).metadata;
   }
   async routing(caller: Caller): Promise<string | null> {
     try {

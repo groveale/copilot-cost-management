@@ -54,23 +54,31 @@ export class GraphClient {
   ) {}
 
   get(path: string, signal: AbortSignal): Promise<unknown> {
-    const result = this.tail.then(() => this.read(path, signal));
+    return this.request("GET", path, signal).then((result) => result.data);
+  }
+  getWithEtag(path: string, signal: AbortSignal) { return this.request("GET", path, signal); }
+  post(path: string, body: unknown, signal: AbortSignal, etag?: string) { return this.request("POST", path, signal, body, etag); }
+  patch(path: string, body: unknown, signal: AbortSignal, etag: string) { return this.request("PATCH", path, signal, body, etag); }
+  private request(method: "GET" | "POST" | "PATCH", path: string, signal: AbortSignal, body?: unknown, etag?: string) {
+    const result = this.tail.then(() => this.send(method, path, signal, body, etag));
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
 
-  private async read(path: string, signal: AbortSignal): Promise<unknown> {
+  private async send(method: "GET" | "POST" | "PATCH", path: string, signal: AbortSignal, body?: unknown, etag?: string): Promise<{ data: unknown; etag: string | null }> {
     const url = graphUrl(path);
     for (let attempt = 0; ; attempt++) {
       signal.throwIfAborted();
       const token = await this.token();
       const response = await this.fetcher(url, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        ...(method === "GET" ? {} : { method, body: JSON.stringify(body) }),
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json",
+          ...(method === "GET" ? {} : { "Content-Type": "application/json" }), ...(etag ? { "If-Match": etag } : {}) },
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
         redirect: "error",
         cache: "no-store",
       });
-      if (response.status === 429 && attempt < 3) {
+      if (method === "GET" && response.status === 429 && attempt < 3) {
         const delay = retryAfterMs(response.headers.get("Retry-After"), attempt);
         if (delay > 60_000) {
           throw new GraphError(`Retry after ${Math.ceil(delay / 1000)} seconds, then refresh the details.`,
@@ -95,8 +103,9 @@ export class GraphClient {
         }
         throw new GraphError(message, response.status, code, response.headers.get("request-id"));
       }
+      if (response.ok && response.status === 204) return { data: null, etag: response.headers.get("etag") };
       try {
-        return JSON.parse(raw);
+        return { data: JSON.parse(raw), etag: response.headers.get("etag") };
       } catch {
         throw new Error(`Graph returned HTTP ${response.status} but not valid JSON for ${new URL(url).pathname}.`);
       }

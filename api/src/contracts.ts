@@ -5,10 +5,11 @@ export interface Budget {
   costCenter: string;
   owners: string[];
   plannedUsd?: number;
+  approvedCreditCeiling?: number;
   periodLabel?: string;
   tiers: Record<"standard" | "enhanced", { policyId: string; groupId: string }>;
 }
-export interface Caller { tenantId: string; objectId: string }
+export interface Caller { tenantId: string; objectId: string; displayName?: string; contactHint?: string }
 export interface Metadata { version: 1; tenantId: string; serviceId: string; budgets: Budget[] }
 export type GrantKind = "permanent" | "billingPeriod";
 export interface Submission { operationId: string; justification: string; grantKind: GrantKind }

@@ -26,6 +26,10 @@ export function createAuthenticator(settings: AuthSettings, keys?: JWTVerifyGetK
         !uuid.safeParse(payload.oid).success) {
       throw new ApiError(403, "forbidden", "The token is not an authorized delegated API access token.");
     }
-    return { tenantId: settings.tenantId, objectId: uuid.parse(payload.oid) };
+    const displayName = typeof payload.name === "string" ? payload.name.trim().slice(0, 200) : "";
+    const contact = typeof payload.preferred_username === "string" ? payload.preferred_username : payload.email;
+    const contactHint = typeof contact === "string" ? contact.trim().slice(0, 320) : "";
+    return { tenantId: settings.tenantId, objectId: uuid.parse(payload.oid),
+      ...(displayName ? { displayName } : {}), ...(contactHint ? { contactHint } : {}) };
   };
 }

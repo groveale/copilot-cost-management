@@ -4,6 +4,7 @@ import { RequestApi } from "./api";
 import { HostedPortal } from "./HostedPortal";
 import { DemoAuth } from "./auth";
 import { parseConfig } from "./config";
+import { BusinessUnitOnboarding } from "./Onboarding";
 
 vi.mock("@azure/msal-browser", () => ({
   PublicClientApplication: class { getActiveAccount() { return null; } getAllAccounts() { return []; } },
@@ -18,6 +19,21 @@ it("shows only login before authentication, never metadata or request fields", (
   const html = renderToStaticMarkup(<HostedPortal config={config} auth={new DemoAuth(config)} requestPage />);
   expect(html).toContain("Sign in with Microsoft");
   expect(html).not.toContain("textarea"); expect(html).not.toContain("Owner approval inbox");
+  expect(html).not.toContain("Request a new BU");
+});
+it("renders the ordinary-user BU form with the exact 20K calculation and no administrator controls", () => {
+  vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+  const config = parseConfig({ version: 1, tenantId: "10000000-0000-4000-8000-000000000001",
+    clientId: "10000000-0000-4000-8000-000000000002", serviceId: "cowork", budgets: [] });
+  const account = { tenantId: config.tenantId, homeAccountId: "home", localAccountId: "local",
+    environment: "login.microsoftonline.com", username: "owner@example.test", name: "Example owner" };
+  const html = renderToStaticMarkup(<BusinessUnitOnboarding api={new RequestApi("https://example.test", async () => "token")}
+    auth={new DemoAuth(config)} account={account} onPublished={() => undefined} />);
+  expect(html).toContain("Request a new business unit");
+  expect(html).toContain("2,000,000 credits/month: 1,000,000 Standard + 1,000,000 Enhanced");
+  expect(html).toContain("owner@example.test");
+  expect(html).not.toContain("Onboarding administration");
+  expect(html).not.toContain('name="owners"');
 });
 it("uses only the API bearer token, includes an abort signal, and transmits the stable operation ID", async () => {
   const transport = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "saved" })));

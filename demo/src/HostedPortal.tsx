@@ -6,6 +6,7 @@ import { RequestApi, type Context, type Page, type RequestRecord, type Submissio
 import { GraphClient } from "./graph";
 import { loadBudgetDetails, type BudgetSnapshot } from "./details";
 import { BudgetDetails } from "./BudgetDetails";
+import { BusinessUnitOnboarding, BudgetAllocation } from "./Onboarding";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabel = (record: RequestRecord) => record.status === "approved" ? "Approved - manual fulfilment required" :
@@ -17,6 +18,7 @@ export function HostedPortal({ config, auth, requestPage }: { config: DemoConfig
   const [error, setError] = useState("");
   const [context, setContext] = useState<Context | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const api = useMemo(() => new RequestApi(config.apiBaseUrl ?? "", () => auth.apiToken(account)), [auth, config.apiBaseUrl, account]);
   useEffect(() => {
     setContext(null);
@@ -29,6 +31,7 @@ export function HostedPortal({ config, auth, requestPage }: { config: DemoConfig
   }, [account, api, busy, refresh]);
 
   async function authenticate(signOut = false) {
+    setOnboardingOpen(false);
     setAccount(null);
     setContext(null);
     setError("");
@@ -56,15 +59,18 @@ export function HostedPortal({ config, auth, requestPage }: { config: DemoConfig
         <button className="secondary" onClick={() => void authenticate(true)}>Sign out</button>
       </div></div></header>
     <nav className="actions"><a href="?view=request">Request an increase</a><a href="?">Owner workspace</a>
+      <button className="secondary" onClick={() => setOnboardingOpen((value) => !value)}>{onboardingOpen ? "Back to workspace" : "Request a new BU"}</button>
       <button className="secondary" onClick={() => { setError(""); setRefresh((n) => n + 1); }}>Refresh workspace</button></nav>
-    {error && <p className="error" role="alert">{error}</p>}
-    {!context && !error && <p role="status">Loading your authorized workspace...</p>}
-    {context && <>
+    {onboardingOpen && <BusinessUnitOnboarding key={`${account.homeAccountId}:${account.localAccountId}`} api={api} auth={auth} account={account}
+      onPublished={() => { setError(""); setRefresh((value) => value + 1); }} />}
+    {!onboardingOpen && error && <p className="error" role="alert">{error}</p>}
+    {!onboardingOpen && !context && !error && <p role="status">Loading your authorized workspace...</p>}
+    {!onboardingOpen && context && <>
       <div className="notice">Approval records a decision only. It does not change a policy, allowance or group membership.
         Owners may approve their own requests in this MVP. Temporary increases use the UTC calendar month for this demo; no automatic reversion is scheduled.</div>
       {requestPage ? <SubmissionForm api={api} context={context} /> : <>
         {!context.ownedBudgets.length ? <section className="card"><h2>No budgets assigned</h2><p>Contact the administrator if you should be an owner. No Graph data has been requested.</p></section> :
-          <><RequestList api={api} inbox /><OwnerGraph budgets={context.ownedBudgets} serviceId={context.serviceId} auth={auth} account={account} /></>}
+          <><RequestList api={api} inbox /><OwnerGraph budgets={context.ownedBudgets} serviceId={context.serviceId} auth={auth} account={account} api={api} /></>}
       </>}
     </>}
     <footer>Evaluation only. Requests are stored privately. Graph preview APIs are not supported for production applications.</footer>
@@ -182,8 +188,8 @@ function RequestCard({ record, api, inbox, onDecision }: {
   </article>;
 }
 
-function OwnerGraph({ budgets, serviceId, auth, account }: {
-  budgets: BudgetConfig[]; serviceId: string; auth: DemoAuth; account: AccountInfo;
+function OwnerGraph({ budgets, serviceId, auth, account, api }: {
+  budgets: BudgetConfig[]; serviceId: string; auth: DemoAuth; account: AccountInfo; api: RequestApi;
 }) {
   const [budgetId, setBudgetId] = useState(budgets[0]?.id ?? "");
   const [snapshot, setSnapshot] = useState<BudgetSnapshot | null>(null);
@@ -212,5 +218,6 @@ function OwnerGraph({ budgets, serviceId, auth, account }: {
       {budgets.map((b) => <option key={b.id} value={b.id}>{b.displayName}</option>)}</select></label>
     <button disabled={busy || !budget} onClick={() => void load()}>{busy ? "Loading Graph..." : "Connect / refresh Graph details"}</button>
     {error && <p className="error" role="alert">{error}</p>}
-  </section>{budget && snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId} />}</>;
+  </section>{budget?.approvedCreditCeiling && <BudgetAllocation key={budget.id} budget={budget} api={api} auth={auth} account={account} onApplied={() => setSnapshot(null)} />}
+    {budget && snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId} />}</>;
 }

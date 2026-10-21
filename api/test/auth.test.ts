@@ -25,6 +25,10 @@ describe("delegated API token validation", () => {
   it("returns only validated stable IDs", async () => {
     expect(await authenticate(`Bearer ${await token()}`)).toEqual({ tenantId, objectId });
   });
+  it("returns optional verified display hints without using email as the ownership key", async () => {
+    expect(await authenticate(`Bearer ${await token({ name: "Example owner", preferred_username: "owner@example.test", email: "different@example.test" })}`))
+      .toEqual({ tenantId, objectId, displayName: "Example owner", contactHint: "owner@example.test" });
+  });
   it.each([null, "", "some-function-key", "Bearer", "Basic value"])("rejects missing/malformed bearer authentication: %s", async (header) => {
     await expect(authenticate(header)).rejects.toMatchObject({ status: 401 });
   });

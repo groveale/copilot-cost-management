@@ -10,6 +10,7 @@ export interface BudgetConfig {
   costCenter: string;
   owners: string[];
   plannedUsd?: number;
+  approvedCreditCeiling?: number;
   periodLabel?: string;
   tiers: Record<TierName, TierConfig>;
 }

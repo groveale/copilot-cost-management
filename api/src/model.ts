@@ -16,6 +16,7 @@ export const metadataSchema = z.object({
     costCenter: z.string().trim().min(1),
     owners: z.array(uuid).min(1),
     plannedUsd: z.number().nonnegative().optional(),
+    approvedCreditCeiling: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
     periodLabel: z.string().trim().min(1).optional(),
     tiers: z.object({ standard: tier, enhanced: tier }).strict(),
   }).strict()),

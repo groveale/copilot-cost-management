@@ -1,5 +1,8 @@
 import type { Context, Decision, Page, RequestRecord, Submission } from "../../api/src/contracts";
+import type { Metadata } from "../../api/src/contracts";
+import type { BuDecision, BuSubmission, OnboardingRecord, WorkUpdate } from "../../api/src/onboarding";
 export type { Context, Decision, Page, RequestRecord, Submission };
+export interface OnboardingCapabilities { isAdmin: boolean; bootstrapEnabled: boolean; objectId: string; displayName?: string; contactHint?: string }
 
 export class RequestApi {
   constructor(
@@ -30,5 +33,22 @@ export class RequestApi {
   submit(input: Submission, signal: AbortSignal): Promise<RequestRecord> { return this.call("requests", signal, input); }
   decide(id: string, input: Decision, signal: AbortSignal): Promise<RequestRecord> {
     return this.call(`requests/${id}/decision`, signal, input);
+  }
+  onboardingCapabilities(signal: AbortSignal): Promise<OnboardingCapabilities> { return this.call("onboarding/capabilities", signal); }
+  onboardingList(signal: AbortSignal, inbox = false, cursor?: string): Promise<Page<OnboardingRecord>> {
+    return this.call(`onboarding${inbox ? "/inbox" : ""}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`, signal);
+  }
+  onboardingSubmit(input: BuSubmission, signal: AbortSignal): Promise<OnboardingRecord> { return this.call("onboarding", signal, input); }
+  onboardingGet(id: string, signal: AbortSignal): Promise<OnboardingRecord> { return this.call(`onboarding/${encodeURIComponent(id)}`, signal); }
+  onboardingDecide(id: string, input: BuDecision, signal: AbortSignal): Promise<OnboardingRecord> {
+    return this.call(`onboarding/${id}/decision`, signal, input);
+  }
+  onboardingWork(id: string, input: WorkUpdate, signal: AbortSignal): Promise<OnboardingRecord> {
+    return this.call(`onboarding/${id}/work`, signal, input);
+  }
+  onboardingSetup(signal: AbortSignal): Promise<Metadata | null> { return this.call("onboarding/setup", signal); }
+  bootstrap(input: unknown, signal: AbortSignal): Promise<{ budgets: number; mappings: number }> { return this.call("onboarding/bootstrap", signal, input); }
+  allocation(budgetId: string, signal: AbortSignal, input?: { operationId: string; standard: number; enhanced: number }): Promise<OnboardingRecord | null> {
+    return this.call(`budgets/${encodeURIComponent(budgetId)}/allocation`, signal, input);
   }
 }
