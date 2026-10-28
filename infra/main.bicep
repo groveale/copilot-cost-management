@@ -12,6 +12,18 @@ param apiClientId string
 param onboardingAdminObjectIds string = ''
 @description('Explicitly enable additive private bootstrap import; disable after initial seeding.')
 param bootstrapEnabled bool = false
+@secure()
+@description('SharePoint sync siteId, policyListId, balanceListId and jobListId. Empty disables sync.')
+param syncDestination object = {}
+@minValue(1)
+@maxValue(8)
+param syncDefaultConcurrency int = 3
+@minValue(1)
+@maxValue(8)
+param syncMaxConcurrency int = 8
+@minValue(1)
+@maxValue(3650)
+param syncJobRetentionDays int = 30
 
 var suffix = uniqueString(resourceGroup().id, prefix)
 var tags = { application: 'copilot-cost-demo', environment: 'demo' }
@@ -66,6 +78,11 @@ resource metadata 'Microsoft.Storage/storageAccounts/blobServices/containers@202
   name: 'metadata'
   properties: { publicAccess: 'None' }
 }
+resource syncCheckpoints 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: businessBlobs
+  name: 'sync-checkpoints'
+  properties: { publicAccess: 'None' }
+}
 resource tables 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
   parent: business
   name: 'default'
@@ -81,6 +98,10 @@ resource index 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-0
 resource onboarding 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
   parent: tables
   name: 'OnboardingRequests'
+}
+resource syncJobs 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tables
+  name: 'SyncJobs'
 }
 module network './network.bicep' = {
   name: 'private-storage-network'
@@ -163,6 +184,13 @@ resource api 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'BUSINESS_BLOB_URL', value: business.properties.primaryEndpoints.blob }
         { name: 'ONBOARDING_ADMIN_OBJECT_IDS', value: onboardingAdminObjectIds }
         { name: 'BOOTSTRAP_ENABLED', value: bootstrapEnabled ? 'true' : 'false' }
+        { name: 'SYNC_SITE_ID', value: syncDestination.?siteId ?? '' }
+        { name: 'SYNC_POLICY_LIST_ID', value: syncDestination.?policyListId ?? '' }
+        { name: 'SYNC_BALANCE_LIST_ID', value: syncDestination.?balanceListId ?? '' }
+        { name: 'SYNC_JOB_LIST_ID', value: syncDestination.?jobListId ?? '' }
+        { name: 'SYNC_DEFAULT_CONCURRENCY', value: string(syncDefaultConcurrency) }
+        { name: 'SYNC_MAX_CONCURRENCY', value: string(syncMaxConcurrency) }
+        { name: 'SYNC_JOB_RETENTION_DAYS', value: string(syncJobRetentionDays) }
       ]
     }
     functionAppConfig: {

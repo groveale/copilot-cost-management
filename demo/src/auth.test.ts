@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InteractionRequiredAuthError, type AccountInfo } from "@azure/msal-browser";
-import { balanceScopes, DemoAuth, isGraphInteractionRequired, requesterScopes, scopes } from "./auth";
+import { balanceScopes, DemoAuth, isGraphInteractionRequired, requesterScopes, scopes, syncScopes } from "./auth";
 import { parseConfig } from "./config";
 
 const msal = vi.hoisted(() => ({
@@ -62,6 +62,33 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("operator-selected delegated scopes", () => {
+  it("uses a dedicated sync scope set and bypasses cached access on explicit PIM refresh", async () => {
+    msal.acquireTokenSilent.mockResolvedValue({ accessToken: "fresh-token" });
+    const auth = new DemoAuth(config);
+    await auth.refreshSync(account);
+    expect(msal.acquireTokenSilent).toHaveBeenCalledExactlyOnceWith({
+      account, scopes: syncScopes, forceRefresh: true, claims: JSON.stringify({ access_token: { xms_cc: { values: ["cp1"] } } }),
+    });
+    expect(syncScopes).toContain("https://graph.microsoft.com/Sites.Selected");
+    expect(syncScopes.some((scope) => scope.includes("ReadWrite") || scope.includes("Directory."))).toBe(false);
+    expect(msal.acquireTokenPopup).not.toHaveBeenCalled();
+  });
+  it("passes a claims challenge to an explicitly requested interaction and preserves account binding", async () => {
+    const claims = JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" } } });
+    msal.acquireTokenSilent.mockRejectedValue(new InteractionRequiredAuthError("interaction_required", "MFA required"));
+    msal.acquireTokenPopup.mockResolvedValue({ account });
+    const auth = new DemoAuth(config);
+    await auth.refreshSync(account, claims);
+    expect(msal.acquireTokenPopup).toHaveBeenCalledWith(expect.objectContaining({ account, scopes: syncScopes,
+      claims: JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" }, xms_cc: { values: ["cp1"] } } }) }));
+    msal.acquireTokenSilent.mockResolvedValueOnce({ accessToken: "challenge-satisfied" });
+    await auth.syncToken(account);
+    expect(msal.acquireTokenSilent).toHaveBeenLastCalledWith(expect.objectContaining({
+      claims: JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" }, xms_cc: { values: ["cp1"] } } }),
+    }));
+    msal.acquireTokenPopup.mockResolvedValue({ account: { ...account, tenantId: "other-tenant" } });
+    await expect(new DemoAuth(config).refreshSync(account, claims)).rejects.toThrow("account changed");
+  });
   it("contains exactly the eight requested Microsoft Graph scopes", () => {
     expect(scopes).toEqual(expected);
     expect(new Set(scopes).size).toBe(8);

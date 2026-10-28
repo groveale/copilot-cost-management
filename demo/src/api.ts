@@ -1,8 +1,12 @@
 import type { Context, Decision, FulfilmentUpdate, Page, RequestRecord, Submission } from "../../api/src/contracts";
 import type { Budget, Metadata } from "../../api/src/contracts";
 import type { AllocationInput, BuDecision, BuSubmission, MemberUpdate, OnboardingRecord, WorkUpdate } from "../../api/src/onboarding";
+import type { SyncJob, SyncSettings, SyncUpdate } from "../../api/src/sync-contracts";
 export type { Context, Decision, Page, RequestRecord, Submission };
 export interface OnboardingCapabilities { isAdmin: boolean; bootstrapEnabled: boolean; objectId: string; displayName?: string; contactHint?: string }
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string) { super(message); }
+}
 
 export class RequestApi {
   constructor(
@@ -19,7 +23,8 @@ export class RequestApi {
     });
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(`${error.message ?? `API request failed (HTTP ${response.status}).`}${error.correlationId ? ` Reference: ${error.correlationId}` : ""}`);
+      throw new ApiRequestError(`${error.message ?? `API request failed (HTTP ${response.status}).`}${error.correlationId ? ` Reference: ${error.correlationId}` : ""}`,
+        response.status, typeof error.code === "string" ? error.code : "api-failed");
     }
     return response.json();
   }
@@ -56,5 +61,20 @@ export class RequestApi {
   }
   allocation(budgetId: string, signal: AbortSignal, input?: AllocationInput): Promise<OnboardingRecord | null> {
     return this.call(`budgets/${encodeURIComponent(budgetId)}/allocation`, signal, input);
+  }
+  syncSettings(signal: AbortSignal): Promise<SyncSettings> { return this.call("admin/sync/settings", signal); }
+  syncCurrent(signal: AbortSignal): Promise<SyncJob | null> { return this.call("admin/sync/current", signal); }
+  syncMaintain(jobId: string, leaseId: string, signal: AbortSignal): Promise<{ removed: number }> {
+    return this.call("admin/sync/maintenance", signal, { jobId, leaseId });
+  }
+  syncJobs(signal: AbortSignal, cursor?: string): Promise<Page<SyncJob>> {
+    return this.call(`admin/sync/jobs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`, signal);
+  }
+  syncJob(id: string, signal: AbortSignal): Promise<SyncJob> { return this.call(`admin/sync/jobs/${id}`, signal); }
+  syncCreate(input: { operationId: string; policyId?: string; concurrency: number }, signal: AbortSignal): Promise<SyncJob> {
+    return this.call("admin/sync/jobs", signal, input);
+  }
+  syncUpdate(id: string, input: SyncUpdate, signal: AbortSignal): Promise<SyncJob> {
+    return this.call(`admin/sync/jobs/${id}`, signal, input);
   }
 }

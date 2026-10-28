@@ -9,6 +9,11 @@ param apiClientId string
 @secure()
 param onboardingAdminObjectIds string = ''
 param bootstrapEnabled bool = false
+@secure()
+param syncDestination object = {}
+param syncDefaultConcurrency int = 3
+param syncMaxConcurrency int = 8
+param syncJobRetentionDays int = 30
 
 resource group 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
@@ -31,6 +36,10 @@ module resources './main.bicep' = {
     apiClientId: apiClientId
     onboardingAdminObjectIds: onboardingAdminObjectIds
     bootstrapEnabled: bootstrapEnabled
+    syncDestination: syncDestination
+    syncDefaultConcurrency: syncDefaultConcurrency
+    syncMaxConcurrency: syncMaxConcurrency
+    syncJobRetentionDays: syncJobRetentionDays
   }
 }
 output resources object = resources.outputs

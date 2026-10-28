@@ -10,12 +10,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Test standalone consumption exporter
+      - name: Test PowerShell export and SharePoint setup
         shell: pwsh
         run: |
           Install-PSResource Pester -Version 5.7.1 -Scope CurrentUser -TrustRepository -Quiet -ErrorAction Stop
           Import-Module Pester -RequiredVersion 5.7.1
-          Invoke-Pester -Path .\scripts\consumption-export.Tests.ps1 -Output Detailed -CI
+          Invoke-Pester -Path .\scripts\consumption-export.Tests.ps1,.\scripts\sync-sharepoint.Tests.ps1 -Output Detailed -CI
   validate:
     runs-on: ubuntu-latest
     steps:

@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory)][string] $SpaClientId,
   [string] $ApiDisplayName = 'Copilot Cost Management Requests API',
   [string] $SiteUrl,
+  [switch] $EnableSync,
   [switch] $Apply
 )
 $ErrorActionPreference = 'Stop'
@@ -28,6 +29,7 @@ if ($SiteUrl) {
 }
 if (!$Apply) {
   Write-Output 'Preview only: create/reuse a single-tenant API registration; expose v2 access_as_user; preauthorize this SPA; preserve existing Graph permissions; ensure enterprise application.'
+  if ($EnableSync) { Write-Output 'Also add delegated sync read scopes and Sites.Selected to the SPA. Consent and the explicit site write grant are separate operator steps.' }
   if ($SiteUrl) { Write-Output "Also preserve existing SPA redirects and add $SiteUrl/auth.html and the localhost callback." }
   Write-Output "Existing matching API registrations: $($matches.Count). Rerun with -Apply after review."
   return
@@ -71,6 +73,23 @@ $existingApiPermission = @($spa.requiredResourceAccess | Where-Object { $_.resou
 $access = @($existingApiPermission.resourceAccess | Where-Object { $null -ne $_ -and $_.id -ne $scopeId })
 $access += @{ id = $scopeId; type = 'Scope' }
 $permissions += @{ resourceAppId = $api.appId; resourceAccess = @($access) }
+if ($EnableSync) {
+  $graphId = '00000003-0000-0000-c000-000000000000'
+  $graph = @(Invoke-AzJson @('ad', 'sp', 'list', '--filter', "appId eq '$graphId'"))
+  if ($graph.Count -ne 1) { throw 'The Microsoft Graph service principal could not be uniquely resolved.' }
+  $wanted = @('CopilotCostManagement-Policy.Read.All', 'CopilotCostManagement-Assignment.Read.All',
+    'CopilotCostManagement-UserData.Read.All', 'GroupMember.Read.All', 'User.ReadBasic.All', 'Sites.Selected')
+  $currentGraph = @($permissions | Where-Object resourceAppId -EQ $graphId)
+  $graphAccess = @($currentGraph.resourceAccess | Where-Object { $null -ne $_ })
+  foreach ($value in $wanted) {
+    $advertised = @($graph[0].oauth2PermissionScopes | Where-Object { $_.value -eq $value -and $_.isEnabled })
+    if ($advertised.Count -ne 1) { throw "Delegated sync permission $value is not advertised in this tenant. Do not substitute application permissions." }
+    if (-not @($graphAccess | Where-Object { $_.id -eq $advertised[0].id -and $_.type -eq 'Scope' }).Count) {
+      $graphAccess += @{ id = $advertised[0].id; type = 'Scope' }
+    }
+  }
+  $permissions = @($permissions | Where-Object resourceAppId -NE $graphId) + @(@{ resourceAppId = $graphId; resourceAccess = $graphAccess })
+}
 $spaPatch = @{ requiredResourceAccess = @($permissions) }
 if ($SiteUrl) {
   $spaPatch.spa = @{

@@ -29,6 +29,10 @@ resource onboarding 'Microsoft.Storage/storageAccounts/tableServices/tables@2023
   parent: tableService
   name: 'OnboardingRequests'
 }
+resource syncJobs 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' existing = {
+  parent: tableService
+  name: 'SyncJobs'
+}
 resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
   parent: business
   name: 'default'
@@ -36,6 +40,10 @@ resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' exist
 resource metadata 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
   parent: blobs
   name: 'metadata'
+}
+resource syncCheckpoints 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: blobs
+  name: 'sync-checkpoints'
 }
 resource insights 'Microsoft.Insights/components@2020-02-02' existing = { name: insightsName }
 
@@ -91,6 +99,24 @@ resource onboardingAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     principalId: runtimeId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableContributor)
+  }
+}
+resource syncJobsAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: syncJobs
+  name: guid(syncJobs.id, runtimeId, tableContributor)
+  properties: {
+    principalId: runtimeId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableContributor)
+  }
+}
+resource syncCheckpointAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: syncCheckpoints
+  name: guid(syncCheckpoints.id, runtimeId, blobContributor)
+  properties: {
+    principalId: runtimeId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributor)
   }
 }
 resource telemetryAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

@@ -51,7 +51,7 @@ export async function loadPolicyInventory(graph: GraphClient, metadata: Metadata
     owners, initialized: metadata !== null };
 }
 
-export function PolicyInventoryTable({ inventory }: { inventory: PolicyInventory }) {
+export function PolicyInventoryTable({ inventory, onSync }: { inventory: PolicyInventory; onSync?: (policyId: string) => void }) {
   const unmapped = inventory.policies.filter((policy) => !policy.mappings.length).length;
   return <>
     {!inventory.initialized && <p className="notice">Initial private metadata has not been imported. Graph policies are listed, but portal ownership is not configured.</p>}
@@ -62,7 +62,8 @@ export function PolicyInventoryTable({ inventory }: { inventory: PolicyInventory
           <thead><tr><th scope="col">Spending policy</th><th scope="col">Mapping</th><th scope="col">Tier</th>
             <th scope="col">Business unit / budget</th><th scope="col">Cost centre</th><th scope="col">Mapped owner(s)</th></tr></thead>
           <tbody>{inventory.policies.map((policy) => <tr key={policy.id}>
-            <td><strong>{policy.displayName}</strong><span className="mono block">{policy.id}</span></td>
+            <td><strong>{policy.displayName}</strong><span className="mono block">{policy.id}</span>
+              {onSync && <button className="secondary" onClick={() => onSync(policy.id)}>Sync this policy</button>}</td>
             <td><span className={`badge ${policy.mappings.length ? "passed" : "warning"}`}>{policy.mappings.length ? "Mapped" : "Unmapped"}</span></td>
             <td>{policy.mappings.length ? policy.mappings.map(({ budget, tier }) => <div key={`${budget.id}:${tier}`}>{tier}</div>) : "Not mapped"}</td>
             <td>{policy.mappings.length ? policy.mappings.map(({ budget, tier }) => <div key={`${budget.id}:${tier}`}>
@@ -83,7 +84,7 @@ export function PolicyInventoryTable({ inventory }: { inventory: PolicyInventory
   </>;
 }
 
-export function AdminPolicies({ api, auth, account }: { api: RequestApi; auth: DemoAuth; account: AccountInfo }) {
+export function AdminPolicies({ api, auth, account, onSync }: { api: RequestApi; auth: DemoAuth; account: AccountInfo; onSync?: (policyId: string) => void }) {
   const [inventory, setInventory] = useState<PolicyInventory | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -119,6 +120,6 @@ export function AdminPolicies({ api, auth, account }: { api: RequestApi; auth: D
     {busy && <p role="status">Loading all policy pages and resolving mapped owner names...</p>}
     <p className="small muted">Uses your cached Graph sign-in, renewing silently when possible. No policy or owner mapping is changed.</p>
     {error && <p className="error" role="alert">{error}</p>}
-    {inventory && <PolicyInventoryTable inventory={inventory} />}
+    {inventory && <PolicyInventoryTable inventory={inventory} onSync={onSync} />}
   </section>;
 }

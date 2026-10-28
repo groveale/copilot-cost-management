@@ -8,6 +8,7 @@ import { loadBudgetDetails, type BudgetSnapshot } from "./details";
 import { BudgetDetails } from "./BudgetDetails";
 import { BusinessUnitOnboarding, BudgetAllocation } from "./Onboarding";
 import { AdminPolicies } from "./AdminPolicies";
+import { AdminSync } from "./AdminSync";
 import { PersonalBalance } from "./PersonalBalance";
 import { ThemeToggle } from "./ThemeToggle";
 import { AddPolicyMember } from "./PolicyMembers";
@@ -56,7 +57,8 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
   const [account, setAccount] = useState(auth.account());
   const [view, setView] = useState(initialView);
   const [owner, setOwner] = useState(() => ownerLocation(typeof window === "undefined" ? "" : window.location.search));
-  const [adminSection, setAdminSection] = useState<"requests" | "policies">("requests");
+  const [adminSection, setAdminSection] = useState<"requests" | "policies" | "sync">("requests");
+  const [syncPolicyId, setSyncPolicyId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [capabilities, setCapabilities] = useState<OnboardingCapabilities | null>(null);
@@ -162,10 +164,14 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
             onClick={() => setAdminSection("requests")}>Setup requests</button>
           <button className={adminSection === "policies" ? "" : "secondary"} aria-pressed={adminSection === "policies"}
             onClick={() => setAdminSection("policies")}>Spending policies</button>
+          <button className={adminSection === "sync" ? "" : "secondary"} aria-pressed={adminSection === "sync"}
+            onClick={() => { setSyncPolicyId(""); setAdminSection("sync"); }}>Sync data</button>
         </nav>
         {adminSection === "requests" ? <BusinessUnitOnboarding api={api} auth={auth} account={account}
           mode="admin" capabilities={capabilities} onPublished={onPublished} /> :
-          <AdminPolicies key={refresh} api={api} auth={auth} account={account} />}
+          adminSection === "sync" ? <AdminSync api={api} auth={auth} account={account} selectedPolicyId={syncPolicyId} /> :
+          <AdminPolicies key={refresh} api={api} auth={auth} account={account}
+            onSync={(policyId) => { setSyncPolicyId(policyId); setAdminSection("sync"); }} />}
       </>}
     </>}
     {workspaceRequired && error && <p className="error" role="alert">{error}</p>}

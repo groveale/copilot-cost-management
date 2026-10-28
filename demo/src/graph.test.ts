@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GraphClient, GraphError, retryAfterMs } from "./graph";
+import { claimsChallenge, GraphClient, GraphError, retryAfterMs } from "./graph";
 
 const signal = () => new AbortController().signal;
 const json = (body: unknown, status = 200, headers = {}) =>
@@ -11,6 +11,16 @@ afterEach(() => {
 });
 
 describe("direct Graph requests", () => {
+  it("preserves validated claims challenges without following a supplied authority URL", async () => {
+    const claims = JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" } } });
+    const header = `Bearer error="insufficient_claims", claims="${btoa(claims)}", authorization_uri="https://untrusted.example"`;
+    expect(claimsChallenge(header)).toBe(claims);
+    expect(() => claimsChallenge('Bearer error="insufficient_claims", claims="bad"')).toThrow("invalid claims");
+    const fetcher = vi.fn<typeof fetch>(async () => json({ error: { code: "insufficient_claims", message: "Refresh access" } }, 401,
+      { "www-authenticate": header }));
+    await expect(new GraphClient(async () => "t", fetcher).get("/v1.0/example", signal())).rejects.toMatchObject({ status: 401, claims });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("keeps the browser fetch receiver instead of calling it as a GraphClient method", async () => {
     const browserFetch = vi.fn<typeof fetch>(function (this: unknown) {
       expect(this).toBe(globalThis);

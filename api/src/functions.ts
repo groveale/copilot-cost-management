@@ -8,8 +8,16 @@ import { AzureStore, credential, required, storageErrorCode } from "./storage.js
 import { allocationSchema, buDecisionSchema, buSubmissionSchema, memberUpdateSchema, workUpdateSchema } from "./onboarding.js";
 import { OnboardingService } from "./onboarding-service.js";
 import { AzureOnboardingStore } from "./onboarding-storage.js";
+import { SyncService, syncCreateSchema, syncMaintenanceSchema, syncSettings, syncUpdateSchema } from "./sync.js";
+import { AzureSyncStore } from "./sync-storage.js";
 
 let dependencies: { service: RequestService; onboarding: OnboardingService; authenticate: ReturnType<typeof createAuthenticator> } | undefined;
+let sync: SyncService | undefined;
+function syncService(onboarding: OnboardingService) {
+  return sync ??= new SyncService(new AzureSyncStore(uuid.parse(required("TENANT_ID")),
+    required("BUSINESS_TABLE_URL"), required("BUSINESS_BLOB_URL"), credential()), syncSettings(),
+    (caller) => onboarding.requireAdmin(caller));
+}
 function services() {
   if (!dependencies) {
     const tenantId = uuid.parse(required("TENANT_ID"));
@@ -50,7 +58,24 @@ export async function handler(request: HttpRequest, context: InvocationContext):
     const cursor = new URL(request.url).searchParams.get("cursor") ?? undefined;
     if (cursor && cursor.length > 4096) throw new ApiError(400, "invalid-cursor", "Invalid pagination cursor.");
     let result: unknown;
-    if (path === "onboarding/capabilities" && request.method === "GET") {
+    if (path.startsWith("admin/sync")) {
+      onboarding.requireAdmin(caller);
+      const executor = syncService(onboarding);
+      if (path === "admin/sync/settings" && request.method === "GET") result = executor.configuration(caller);
+      else if (path === "admin/sync/current" && request.method === "GET") result = await executor.current(caller);
+      else if (path === "admin/sync/maintenance" && request.method === "POST") {
+        result = await executor.maintain(caller, await body(request, syncMaintenanceSchema));
+      }
+      else if (path === "admin/sync/jobs" && request.method === "GET") result = await executor.list(caller, cursor);
+      else if (path === "admin/sync/jobs" && request.method === "POST") result = await executor.create(caller, await body(request, syncCreateSchema));
+      else if (/^admin\/sync\/jobs\/[a-f0-9-]{36}$/.test(path)) {
+        const parsed = uuid.safeParse(path.split("/")[3]);
+        if (!parsed.success) throw new ApiError(400, "invalid-input", "Invalid sync job ID.");
+        const id = parsed.data;
+        if (request.method === "GET") result = await executor.get(caller, id);
+        else result = await executor.update(caller, id, await body(request, syncUpdateSchema, 1_048_576));
+      } else throw new ApiError(404, "not-found", "Sync endpoint not found.");
+    } else if (path === "onboarding/capabilities" && request.method === "GET") {
       result = { isAdmin: onboarding.isAdmin(caller), bootstrapEnabled: onboarding.isAdmin(caller) && process.env.BOOTSTRAP_ENABLED === "true",
         objectId: caller.objectId, displayName: caller.displayName, contactHint: caller.contactHint };
     } else if (path === "onboarding" && request.method === "POST") result = await onboarding.submit(caller, await body(request, buSubmissionSchema));

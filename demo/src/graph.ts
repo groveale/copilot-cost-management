@@ -6,9 +6,41 @@ export class GraphError extends Error {
     readonly status: number,
     readonly code: string,
     readonly requestId: string | null,
+    readonly claims?: string,
   ) {
     super(`${code} (HTTP ${status}): ${message}${requestId ? ` [request ${requestId}]` : ""}`);
     this.name = "GraphError";
+  }
+}
+
+export function claimsChallenge(header: string | null): string | undefined {
+  if (!header || !/\berror\s*=\s*"insufficient_claims"/i.test(header)) return undefined;
+  const encoded = /\bclaims\s*=\s*"([A-Za-z0-9+/_=-]+)"/i.exec(header)?.[1];
+  if (!encoded || encoded.length > 12000) throw new Error("Graph returned an invalid claims challenge.");
+  try {
+    const json = atob(encoded.replace(/-/g, "+").replace(/_/g, "/"));
+    const value = object(JSON.parse(json), "Claims challenge");
+    object(value.access_token, "Access-token claims");
+    if (json.length > 8192) throw new Error("Oversized claims.");
+    return JSON.stringify(value);
+  } catch {
+    throw new Error("Graph returned an invalid claims challenge.");
+  }
+}
+
+export class RequestScheduler {
+  private active = 0;
+  private readonly pending: (() => void)[] = [];
+  constructor(readonly concurrency: number) {
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("Sync concurrency must be 1-8.");
+  }
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    await new Promise<void>((resolve) => {
+      const start = () => { this.active++; resolve(); };
+      if (this.active < this.concurrency) start(); else this.pending.push(start);
+    });
+    try { return await operation(); }
+    finally { this.active--; this.pending.shift()?.(); }
   }
 }
 
@@ -51,6 +83,7 @@ export class GraphClient {
   constructor(
     private readonly token: () => Promise<string>,
     private readonly fetcher: typeof fetch = fetch.bind(globalThis),
+    private readonly scheduler?: RequestScheduler,
   ) {}
 
   get(path: string, signal: AbortSignal): Promise<unknown> {
@@ -66,7 +99,15 @@ export class GraphClient {
     }
     return this.request("DELETE", path, signal);
   }
+  deleteListItem(path: string, signal: AbortSignal, etag: string) {
+    const url = new URL(graphUrl(path));
+    if (!/^\/v1\.0\/sites\/[^/]+\/lists\/[a-f0-9-]{36}\/items\/\d+$/.test(url.pathname) || url.search || !etag || etag === "*") {
+      throw new Error("Only an explicit SharePoint list item with a specific ETag may be deleted.");
+    }
+    return this.request("DELETE", path, signal, undefined, etag);
+  }
   private request(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, signal: AbortSignal, body?: unknown, etag?: string) {
+    if (this.scheduler) return this.scheduler.run(() => this.send(method, path, signal, body, etag));
     const result = this.tail.then(() => this.send(method, path, signal, body, etag));
     this.tail = result.then(() => undefined, () => undefined);
     return result;
@@ -85,7 +126,7 @@ export class GraphClient {
         redirect: "error",
         cache: "no-store",
       });
-      if (method === "GET" && response.status === 429 && attempt < 3) {
+      if (method === "GET" && (response.status === 429 || (this.scheduler && [503, 504].includes(response.status))) && attempt < 3) {
         const delay = retryAfterMs(response.headers.get("Retry-After"), attempt);
         if (delay > 60_000) {
           throw new GraphError(`Retry after ${Math.ceil(delay / 1000)} seconds, then refresh the details.`,
@@ -108,7 +149,8 @@ export class GraphClient {
         } catch {
           message = `Non-JSON or malformed error response: ${message}`;
         }
-        throw new GraphError(message, response.status, code, response.headers.get("request-id"));
+        throw new GraphError(message, response.status, code, response.headers.get("request-id"),
+          claimsChallenge(response.headers.get("www-authenticate")));
       }
       if (response.ok && response.status === 204) return { data: null, etag: response.headers.get("etag") };
       try {

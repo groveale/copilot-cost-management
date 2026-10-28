@@ -2,6 +2,11 @@
 
 ## Architecture and limits
 
+The administrator [SharePoint data sync](./admin-sync.md) adds resumable
+browser-driven collection, three reporting lists, private task/checkpoint state
+and PIM-aware refresh controls. Follow its separate setup/consent steps before
+enabling sync. This does not add an unattended Graph worker or queue trigger.
+
 - Static Web Apps **Free**, West Europe resource location, globally served assets.
 - Standalone Linux Functions **Flex Consumption / Node 24**, UK South.
 - Separate Standard LRS host/package and business storage accounts, UK South.
@@ -9,7 +14,8 @@
   endpoints with private DNS. Both storage accounts disable public networking;
   private endpoints/DNS have ongoing charges even when the Function scales to zero.
 - Private JSON blob for budget/owner metadata; `RequesterBudgetIndex`,
-  `Requests` and `OnboardingRequests` Tables. No Graph proxy or application
+  `Requests`, `OnboardingRequests` and `SyncJobs` Tables, plus private
+  `sync-checkpoints` blobs. No Graph proxy or application
   Graph permissions. New BU provisioning/allocation and approved credit-request
   membership moves use delegated Graph in the administrator/owner browser.
 - UK South Application Insights/Log Analytics; 30-day retention, sampling and a
@@ -121,8 +127,8 @@ Review its what-if first. No normal CI job has role-assignment authority.
 
 Runtime scope: Blob Data Owner on host storage for this HTTP-only Functions host
 and package read/write; Table Data Contributor on the **Requests**,
-**OnboardingRequests** and **RequesterBudgetIndex** tables individually; Blob
-Data Contributor on the **metadata container only**; Monitoring Metrics Publisher
+**OnboardingRequests**, **SyncJobs** and **RequesterBudgetIndex** tables individually; Blob
+Data Contributor on the **metadata** and **sync-checkpoints** containers individually; Monitoring Metrics Publisher
 on Insights. These narrowly scoped writes support ongoing onboarding, not only
 one-off seeding. There are no triggers
 requiring queue/durable/table host permissions. The seed operator gets write

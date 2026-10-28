@@ -1,5 +1,5 @@
 import { InteractionRequiredAuthError, PublicClientApplication, type AccountInfo } from "@azure/msal-browser";
-import type { DemoConfig } from "./config";
+import { object, type DemoConfig } from "./config";
 
 export const scopes = [
   "CopilotCostManagement-Assignment.Read.All",
@@ -17,11 +17,21 @@ export const balanceScopes = [
   "https://graph.microsoft.com/CopilotCostManagement-UserData.Read.All",
   "https://graph.microsoft.com/CopilotCostManagement-Policy.Read.All",
 ];
+export const syncScopes = [
+  "CopilotCostManagement-Policy.Read.All", "CopilotCostManagement-Assignment.Read.All",
+  "CopilotCostManagement-UserData.Read.All", "GroupMember.Read.All", "User.ReadBasic.All", "Sites.Selected",
+].map((scope) => `https://graph.microsoft.com/${scope}`);
 export const isGraphInteractionRequired = (error: unknown): error is InteractionRequiredAuthError =>
   error instanceof InteractionRequiredAuthError;
+function syncClaims(claims?: string) {
+  const request = claims ? object(JSON.parse(claims), "Claims request") : {};
+  const access = request.access_token === undefined ? {} : object(request.access_token, "Access-token claims");
+  return JSON.stringify({ ...request, access_token: { ...access, xms_cc: { values: ["cp1"] } } });
+}
 
 export class DemoAuth {
   private readonly app: PublicClientApplication;
+  private syncChallenge?: { accountId: string; claims: string };
 
   constructor(private readonly config: DemoConfig) {
     this.app = new PublicClientApplication({
@@ -72,6 +82,25 @@ export class DemoAuth {
     return this.acquire(balanceScopes, account);
   }
 
+  async syncToken(account: AccountInfo, forceRefresh = false, claims?: string): Promise<string> {
+    const accountId = `${account.homeAccountId}:${account.localAccountId}`;
+    const requested = claims ?? (this.syncChallenge?.accountId === accountId ? this.syncChallenge.claims : undefined);
+    const token = await this.acquire(syncScopes, account, { forceRefresh, claims: syncClaims(requested) });
+    if (requested) this.syncChallenge = { accountId, claims: requested };
+    return token;
+  }
+
+  async refreshSync(account: AccountInfo, claims?: string): Promise<void> {
+    try { await this.syncToken(account, true, claims); return; }
+    catch (error) { if (!isGraphInteractionRequired(error)) throw error; }
+    const accountId = `${account.homeAccountId}:${account.localAccountId}`;
+    const requested = claims ?? (this.syncChallenge?.accountId === accountId ? this.syncChallenge.claims : undefined);
+    const result = await this.app.acquireTokenPopup({ account, scopes: syncScopes, claims: syncClaims(requested) });
+    if (result.account.homeAccountId !== account.homeAccountId || result.account.localAccountId !== account.localAccountId ||
+        result.account.tenantId.toLowerCase() !== this.config.tenantId) throw new Error("The account changed during sync authentication.");
+    if (requested) this.syncChallenge = { accountId, claims: requested };
+  }
+
   async consentGraph(account: AccountInfo): Promise<void> {
     return this.consent(scopes, account);
   }
@@ -93,18 +122,20 @@ export class DemoAuth {
     }
   }
 
-  private async acquire(requestScopes: string[], account: AccountInfo | null): Promise<string> {
+  private async acquire(requestScopes: string[], account: AccountInfo | null,
+    options: { forceRefresh?: boolean; claims?: string } = {}): Promise<string> {
     const active = this.account();
     if (!account || !active) throw new Error("Sign in to the configured tenant before loading protected data.");
     if (account.tenantId.toLowerCase() !== this.config.tenantId ||
         account.homeAccountId !== active.homeAccountId || account.localAccountId !== active.localAccountId) {
       throw new Error("The signed-in account changed. Sign in again before loading protected data.");
     }
-    const result = await this.app.acquireTokenSilent({ account, scopes: requestScopes });
+    const result = await this.app.acquireTokenSilent({ account, scopes: requestScopes, ...options });
     return result.accessToken;
   }
 
   async signOut(): Promise<void> {
+    this.syncChallenge = undefined;
     const account = this.account();
     if (account) await this.app.logoutPopup({ account, mainWindowRedirectUri: window.location.href });
   }

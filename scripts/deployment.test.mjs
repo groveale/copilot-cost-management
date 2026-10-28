@@ -75,3 +75,23 @@ test("deployment federation uses the immutable repository prefix and exact envir
   assert.equal((bootstrap.match(/audiences: \[ 'api:\/\/AzureADTokenExchange' \]/g) ?? []).length, 3);
   assert.doesNotMatch(bootstrap, /claimsMatchingExpression|subject: '[^']*\*/);
 });
+test("sync keeps execution private, scoped and browser-delegated without queue infrastructure", async () => {
+  const main = await read("infra/main.bicep");
+  assert.match(main, /name: 'SyncJobs'/);
+  assert.match(main, /name: 'sync-checkpoints'/);
+  assert.match(main, /@secure\(\)[\s\S]*?param syncDestination object = \{\}/);
+  for (const setting of ["SYNC_SITE_ID", "SYNC_POLICY_LIST_ID", "SYNC_BALANCE_LIST_ID", "SYNC_JOB_LIST_ID",
+    "SYNC_DEFAULT_CONCURRENCY", "SYNC_MAX_CONCURRENCY", "SYNC_JOB_RETENTION_DAYS"]) assert.ok(main.includes(setting));
+  const access = await read("infra/access.bicep");
+  assert.match(access, /scope: syncJobs/);
+  assert.match(access, /scope: syncCheckpoints/);
+  assert.doesNotMatch(main, /queueServices|clientSecret|AccountKey/);
+  const workflow = await read(".github/workflows/infra.yml");
+  assert.match(workflow, /secrets\.SYNC_DESTINATION_JSON/);
+  assert.match(workflow, /sync-config\.sha256/);
+  const configure = await read("scripts/configure-entra.ps1");
+  assert.match(configure, /Sites.Selected/);
+  assert.match(configure, /type = 'Scope'/);
+  const publicConfig = JSON.parse(await read("demo/public/demo-config.json"));
+  assert.equal(publicConfig.syncDestination, undefined);
+});
