@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Caller, Metadata, PolicyDefaults } from "../src/contracts.js";
 import { ApiError, metadataSchema } from "../src/model.js";
 import { allocationCeiling, checkAllocation, DEMO_MONTHLY_CREDIT_CEILING, splitCredits, usdToCredits } from "../src/budget-math.js";
@@ -59,7 +59,6 @@ beforeEach(() => {
 const approval = (etag: string): Extract<BuDecision, { status: "approved" }> => ({ status: "approved", etag, financeConfirmed: true,
   reviewNote: "Cost centre and cross charging validated.", ...defaults });
 async function approved() {
-  store.value ??= structuredClone({ ...legal, budgets: [] });
   const pending = await service.submit(owner, submission);
   return service.decide(admin, pending.id, approval(pending.etag));
 }
@@ -133,7 +132,7 @@ describe("onboarding authorization and persistence", () => {
     expect(record).toMatchObject({ status: "provisioning", approvedCredits: 2_000_000,
       financeConfirmed: true, decisionBy: admin.objectId,
       standard: { credits: 1_000_000, ...defaults.standard }, enhanced: { credits: 1_000_000, ...defaults.enhanced } });
-    expect(store.value!.budgets).toEqual([]);
+    expect(store.value).toBeNull();
     await expect(service.decide(admin, record.id, approval(record.etag))).rejects.toMatchObject({ status: 409 });
     expect(buDecisionSchema.safeParse({ ...approval(record.etag), financeConfirmed: false }).success).toBe(false);
     expect(buDecisionSchema.safeParse(approval("*")).success).toBe(false);
@@ -166,6 +165,19 @@ describe("onboarding authorization and persistence", () => {
     expect(store.value!.budgets[1]).toMatchObject({ id: record.budgetId, owners: [owner.objectId],
       approvedCreditCeiling: 2_000_000, plannedUsd: 20000, tiers: { standard: { groupId: id(20), policyId: id(22) } } });
     expect(store.routes.get(owner.objectId)).toBe("legal");
+  });
+  it("completes the first BU using built-in defaults without a private bootstrap", async () => {
+    const record = await completed();
+    expect(record).toMatchObject({
+      status: "completed",
+      standard: { perUserCredits: 10000, billingMethods: "payAsYouGo" },
+      enhanced: { perUserCredits: 25000, billingMethods: "payAsYouGo" },
+    });
+    expect(store.value).toMatchObject({
+      tenantId: owner.tenantId, serviceId: "cowork",
+      budgets: [{ id: record.budgetId, owners: [owner.objectId], approvedCreditCeiling: 2_000_000 }],
+    });
+    expect(store.routes.size).toBe(0);
   });
   it("authorizes allocations by current ownership and validates the ceiling server-side", async () => {
     const record = await completed();
@@ -257,14 +269,45 @@ describe("onboarding authorization and persistence", () => {
     await expect(service.bootstrap(admin, seed)).rejects.toMatchObject({ status: 409 });
     expect(store.routes.get(owner.objectId)).toBe("already-mapped");
   });
-  it("requires private defaults for approval rather than guessing or accepting browser-selected settings", async () => {
+  it.each(["uninitialized", "legacy"])("uses built-in 10K / 25K pay-as-you-go defaults with %s metadata", async (state) => {
+    if (state === "legacy") {
+      store.value = structuredClone(legal);
+      delete store.value.onboardingDefaults;
+    }
+    const before = await store.metadata();
     const record = await service.submit(owner, submission);
-    await expect(service.decide(admin, record.id, approval(record.etag))).rejects.toMatchObject({
-      status: 409, code: "onboarding-defaults-required",
+    const saved = await service.decide(admin, record.id, approval(record.etag));
+    expect(saved).toMatchObject({
+      status: "provisioning", approvedCredits: 2_000_000, financeConfirmed: true,
+      standard: { credits: 1_000_000, perUserCredits: 10000, billingMethods: "payAsYouGo" },
+      enhanced: { credits: 1_000_000, perUserCredits: 25000, billingMethods: "payAsYouGo" },
     });
-    store.value = structuredClone({ ...legal, budgets: [] });
+    expect(await store.metadata()).toEqual(before);
+    expect(store.routes.size).toBe(0);
+  });
+  it.each(["built-in", "configured"])("rejects browser-selected settings that differ from the %s defaults", async (source) => {
+    if (source === "configured") store.value = structuredClone({ ...legal, budgets: [] });
+    const record = await service.submit(owner, submission);
     await expect(service.decide(admin, record.id, { ...approval(record.etag),
       standard: { perUserCredits: 99999, billingMethods: "prepaidCredits" } })).rejects.toMatchObject({ status: 409 });
+    expect((await service.get(owner, record.id)).status).toBe("pending");
+  });
+  it("preserves explicit configured defaults, including zero and unlimited caps", async () => {
+    const custom: PolicyDefaults = {
+      standard: { perUserCredits: 0, billingMethods: "prepaidCredits" },
+      enhanced: { perUserCredits: null, billingMethods: "prepaidCredits,payAsYouGo" },
+    };
+    store.value = structuredClone({ ...legal, onboardingDefaults: custom });
+    const record = await service.submit(owner, submission);
+    await expect(service.decide(admin, record.id, approval(record.etag))).rejects.toMatchObject({ status: 409 });
+    const saved = await service.decide(admin, record.id, { ...approval(record.etag), ...custom });
+    expect(saved.standard).toEqual({ ...custom.standard, credits: 1_000_000 });
+    expect(saved.enhanced).toEqual({ ...custom.enhanced, credits: 1_000_000 });
+  });
+  it("does not treat metadata read failures as missing optional defaults", async () => {
+    const record = await service.submit(owner, submission);
+    vi.spyOn(store, "metadata").mockRejectedValue(new Error("Private metadata access denied."));
+    await expect(service.decide(admin, record.id, approval(record.etag))).rejects.toThrow("Private metadata access denied.");
     expect((await service.get(owner, record.id)).status).toBe("pending");
   });
   it("compares settings by value and freezes approved defaults for subsequent recovery", async () => {

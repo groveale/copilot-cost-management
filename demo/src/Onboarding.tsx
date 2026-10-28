@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { Budget, Page, PolicyDefaults } from "../../api/src/contracts";
+import { builtInOnboardingDefaults } from "../../api/src/contracts";
 import type { BuSubmission, OnboardingRecord } from "../../api/src/onboarding";
 import { allocationCeiling, checkAllocation, splitCredits, usdToCredits } from "../../api/src/budget-math";
 import { RequestApi, type OnboardingCapabilities } from "./api";
@@ -41,7 +42,7 @@ export function BusinessUnitOnboarding({ api, auth, account, onPublished, mode, 
     void (async () => {
       const result = await api.onboardingList(current.signal, admin);
       const metadata = admin ? await api.onboardingSetup(current.signal) : null;
-      if (!current.signal.aborted) { setPage(result); setDefaults(metadata?.onboardingDefaults ?? null); }
+      if (!current.signal.aborted) { setPage(result); setDefaults(metadata?.onboardingDefaults ?? builtInOnboardingDefaults); }
     })().catch((error: unknown) => { if (!current.signal.aborted) setError(message(error)); });
     return () => current.abort();
   }, [api, mode, admin, refresh]);
@@ -165,17 +166,17 @@ export function OnboardingCard({ record, admin, defaults, api, auth, account, bu
     {record.status === "provisioning" && <p>Created resources: {Object.keys(record.resources).length}/4.
       Incomplete operations retain their progress. No new ownership is published until verification completes.</p>}
     {admin && record.status === "pending" && <div className="request-form">
-      {defaults ? <p>Fixed per-person defaults: Standard {defaults.standard.perUserCredits === null ? "Unlimited" : format(defaults.standard.perUserCredits)} credits,
+      {defaults ? <p>Per-person policy defaults: Standard {defaults.standard.perUserCredits === null ? "Unlimited" : format(defaults.standard.perUserCredits)} credits,
         {" "}{defaults.standard.billingMethods}; Enhanced {defaults.enhanced.perUserCredits === null ? "Unlimited" : format(defaults.enhanced.perUserCredits)} credits,
         {" "}{defaults.enhanced.billingMethods}. Existing BU policies are not changed.</p> :
-        <p className="notice">Fixed defaults are not loaded. Refresh setup requests or ask an onboarding administrator to configure the private setup metadata before approving.</p>}
+        <p className="notice">Checking policy defaults. If this does not complete, refresh onboarding and check any reported error.</p>}
       <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={(event) => setConfirmed(event.target.checked)} />
         I have validated this cost centre and cross-charging arrangement.</label>
       <label>Validation note / rejection reason (10-1000 characters)
         <textarea value={note} disabled={busy} maxLength={1000} onChange={(event) => setNote(event.target.value)} /></label>
       <div className="actions">
         <button disabled={busy || !confirmed || note.trim().length < 10 || !defaults} onClick={() => void perform(async (signal) => {
-          if (!defaults) throw new Error("Configure the fixed private policy defaults before approving.");
+          if (!defaults) throw new Error("Refresh onboarding to check the policy defaults before approving.");
           await graphToken();
           signal.throwIfAborted();
           const approved = await api.onboardingDecide(record.id, { status: "approved", etag: record.etag,

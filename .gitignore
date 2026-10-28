@@ -14,3 +14,4 @@ local.settings.json
 *.bicep.json
 infra/*.parameters.json
 test-results/
+/testResults.xml

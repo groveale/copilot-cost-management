@@ -207,11 +207,13 @@ red **Rejected**. Status text accompanies the colour; approval alone is not
 completion. Expand to review details or use admin approval/recovery controls.
 Collapsing preserves review drafts and in-flight work; recorded errors remain visible.
 
-Fixed defaults live in private `metadata.onboardingDefaults` JSON:
-Standard has **10,000 credits per person** and Enhanced **25,000**, both
-`payAsYouGo` in the supplied seed example. These are per-person caps, not the
-pooled BU policy budgets. No limits/billing defaults are silently invented.
-An authorized operator can import the updated private seed through the explicitly
+New BUs use built-in defaults of **10,000 credits per person** for Standard and
+**25,000** for Enhanced, both `payAsYouGo`. These are per-person caps, not the
+pooled BU policy budgets. Private `metadata.onboardingDefaults` JSON is optional;
+when present, its caps and billing methods take precedence, including explicit
+zero or Unlimited caps. Missing metadata/defaults no longer block approval or
+require a seed import. Metadata read failures still surface as errors.
+An authorized operator can import optional overrides through the explicitly
 enabled `POST /api/v1/onboarding/bootstrap` API after deploying this version;
 there is no importer in the portal UI. Reimporting adds missing defaults
 without resetting requests or changing existing budgets/Graph policies.
@@ -219,7 +221,8 @@ A configuration-only seed with empty `budgets` and `requesterIndex` is also
 supported. Different existing defaults conflict rather than being overwritten.
 New approvals verify the reviewed settings against private configuration and
 freeze them into the operation; older approved/recovering operations keep their
-recorded settings. Missing defaults block approval but not request/rejection.
+recorded settings. Approval still requires administrator access, cost-centre
+confirmation and a validation note.
 
 Approval provisions two security groups and two Cowork policies using the
 administrator's delegated Graph connection. Groups are owned by the requester

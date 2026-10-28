@@ -279,7 +279,7 @@ code as the onboarding release.
    This disables `POST /api/v1/onboarding/bootstrap`; ongoing onboarding keeps
    its narrowly scoped storage writes.
 
-Fixed new-BU settings belong in private `metadata.onboardingDefaults`, not the
+Optional new-BU overrides belong in private `metadata.onboardingDefaults`, not the
 public frontend bootstrap:
 
 ```json
@@ -289,7 +289,13 @@ public frontend bootstrap:
 }
 ```
 
-Deploy the updated API/frontend before importing this field. Reimporting the
+Without this field (including before metadata is initialized), the API and
+frontend use built-in per-person caps of **10,000 Standard / 25,000 Enhanced**,
+both `payAsYouGo`. No import is required to approve a new BU. Explicit private
+settings override the built-in values, including zero or Unlimited caps.
+Metadata access/validation failures remain errors, not missing configuration.
+
+Deploy the updated API/frontend before importing overrides. Reimporting the
 updated private seed adds missing defaults without replacing existing budgets,
 routing or requests, and does not modify existing Graph resources. Identical
 defaults replay safely; different existing defaults conflict. A seed containing
@@ -297,8 +303,8 @@ only this configuration, the normal tenant/service/version fields, empty
 `budgets` and empty `requesterIndex` is valid, so no existing BU is required.
 If bootstrap was already disabled, temporarily enable it through the protected
 infrastructure workflow, import/verify, then disable it again. New approvals
-remain blocked until defaults are configured; do not substitute zero, unlimited
-or a different billing mode for missing configuration.
+use the built-in defaults when no overrides are configured; the administrator
+must still confirm the cost centre and provide a validation note.
 After import, roll back only to an API version that understands
 `onboardingDefaults`; older strict metadata schemas reject the new field.
 
@@ -317,8 +323,9 @@ private seed into the application.
   actual rated price or a purchase. Amounts are parsed as integer cents.
   **USD 20,000 = 2,000,000 credits**, initially **1,000,000 per policy**. A spare
   whole credit goes to Enhanced when the total is odd. The period is a UTC month.
-- The administrator reviews fixed Standard/Enhanced per-user limits and billing
-  methods from the private JSON; there is no BU-template selector or Graph
+- The administrator reviews Standard/Enhanced per-user limits and billing
+  methods from optional private overrides or the built-in 10K / 25K pay-as-you-go
+  defaults; there is no BU-template selector or Graph
   template read. The API rechecks the reviewed values against configuration and
   freezes them into the approved operation. Later configuration changes do not
   rewrite already-approved/recovering operations. Unlimited remains explicit,

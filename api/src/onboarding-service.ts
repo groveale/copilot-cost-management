@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import type { Budget, Caller, Metadata, PolicyDefaults } from "./contracts.js";
+import { builtInOnboardingDefaults } from "./contracts.js";
 import { ApiError, metadataSchema, seedSchema } from "./model.js";
 import { requestId } from "./service.js";
 import { allocationCeiling, checkAllocation, splitCredits, usdToCredits } from "./budget-math.js";
@@ -82,11 +83,9 @@ export class OnboardingService {
     if (input.status === "rejected") {
       updated.status = "rejected"; updated.rejectionReason = input.reason;
     } else {
-      const defaults = (await this.store.metadata()).metadata?.onboardingDefaults;
-      if (!defaults) throw new ApiError(409, "onboarding-defaults-required",
-        "Fixed onboarding defaults are not configured. An onboarding administrator must configure the private setup metadata before approving.");
+      const defaults = (await this.store.metadata()).metadata?.onboardingDefaults ?? builtInOnboardingDefaults;
       if (!sameDefaults(input, defaults)) {
-        conflict("The policy defaults changed or differ from the private configuration. Refresh setup requests before approving.");
+        conflict("The policy defaults changed or differ from the effective defaults. Refresh setup requests before approving.");
       }
       updated.status = "provisioning"; updated.approvedCredits = usdToCredits(record.monthlyBudgetUsd);
       updated.standard = { ...defaults.standard, credits: record.standard.credits };

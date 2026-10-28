@@ -15,6 +15,10 @@ export interface PolicyTierDefaults {
   billingMethods: "notSpecified" | "prepaidCredits" | "payAsYouGo" | "prepaidCredits,payAsYouGo";
 }
 export interface PolicyDefaults { standard: PolicyTierDefaults; enhanced: PolicyTierDefaults }
+export const builtInOnboardingDefaults: PolicyDefaults = {
+  standard: { perUserCredits: 10000, billingMethods: "payAsYouGo" },
+  enhanced: { perUserCredits: 25000, billingMethods: "payAsYouGo" },
+};
 export interface Metadata { version: 1; tenantId: string; serviceId: string; budgets: Budget[]; onboardingDefaults?: PolicyDefaults }
 export type GrantKind = "permanent" | "billingPeriod";
 export interface Submission { operationId: string; justification: string; grantKind: GrantKind }

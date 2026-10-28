@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { builtInOnboardingDefaults, type PolicyDefaults } from "../../api/src/contracts";
 import type { OnboardingRecord } from "../../api/src/onboarding";
 import { RequestApi } from "./api";
 import { DemoAuth } from "./auth";
@@ -21,7 +22,7 @@ const record: OnboardingRecord = {
   enhanced: { credits: 1000000, perUserCredits: 25000, billingMethods: "payAsYouGo" },
   resources: {}, intents: [], etag: "specific-etag",
 };
-function render(value: OnboardingRecord, admin = false) {
+function render(value: OnboardingRecord, admin = false, defaults: PolicyDefaults | null = builtInOnboardingDefaults) {
   vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
   const config = parseConfig({ version: 1, tenantId: id(1), clientId: id(2), serviceId: "cowork", budgets: [] });
   const perform = vi.fn(async () => undefined);
@@ -29,7 +30,7 @@ function render(value: OnboardingRecord, admin = false) {
     api={new RequestApi("https://example.test", async () => "synthetic-token")} auth={new DemoAuth(config)}
     account={{ tenantId: id(1), localAccountId: id(3), homeAccountId: "home",
       environment: "login.microsoftonline.com", username: "owner@example.test" }}
-    busy={false} defaults={{ standard: record.standard, enhanced: record.enhanced }}
+    busy={false} defaults={defaults}
     perform={perform} progress={() => undefined} onPublished={() => undefined} />);
   return { html, perform };
 }
@@ -60,6 +61,26 @@ describe("compact BU request cards", () => {
     }
     expect(admin.indexOf('hidden=""')).toBeLessThan(admin.indexOf("Approve and provision"));
     expect(owner).toContain(record.justification);
+  });
+  it("shows the built-in per-person defaults separately from the pooled budget", () => {
+    const { html } = render(record, true);
+    expect(html).toContain("Per-person policy defaults: Standard 10,000 credits, payAsYouGo; Enhanced 25,000 credits, payAsYouGo.");
+    expect(html).toContain("1,000,000 / 1,000,000");
+    expect(html).not.toContain("Fixed defaults are not loaded");
+    expect(html).not.toContain("configure the private setup metadata");
+  });
+  it("shows configured caps and billing methods instead of replacing them with built-in values", () => {
+    const { html } = render(record, true, {
+      standard: { perUserCredits: 0, billingMethods: "prepaidCredits" },
+      enhanced: { perUserCredits: null, billingMethods: "prepaidCredits,payAsYouGo" },
+    });
+    expect(html).toContain("Standard 0 credits, prepaidCredits; Enhanced Unlimited credits, prepaidCredits,payAsYouGo.");
+  });
+  it("keeps approval blocked while the setup read is unresolved without requiring private defaults to be configured", () => {
+    const { html } = render(record, true, null);
+    expect(html).toContain("Checking policy defaults");
+    expect(html).toContain('<button disabled="">Approve and provision</button>');
+    expect(html).not.toContain("configure the private setup metadata");
   });
   it("keeps provisioning orange/incomplete and preserves the explicit admin recovery action", () => {
     const { html } = render({ ...record, status: "provisioning", resources: { standardGroup: id(5), enhancedGroup: id(6) } }, true);
