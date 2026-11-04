@@ -10,6 +10,7 @@ param(
     [ValidateRange(1, 8)][int]$MaxConcurrency = 8,
     [switch]$GrantSiteAccess,
     [switch]$LockDownReporting,
+    [switch]$PrototypeReporting,
     [string[]]$AdminObjectIds = @(),
     [switch]$Apply
 )
@@ -221,9 +222,11 @@ function Initialize-SyncSharePoint {
         [ValidateRange(1, 3650)][int]$RetentionDays = 30,
         [ValidateRange(1, 8)][int]$DefaultConcurrency = 3,
         [ValidateRange(1, 8)][int]$MaxConcurrency = 8,
-        [switch]$GrantSiteAccess, [switch]$LockDownReporting, [string[]]$AdminObjectIds = @(), [switch]$Apply
+        [switch]$GrantSiteAccess, [switch]$LockDownReporting, [switch]$PrototypeReporting,
+        [string[]]$AdminObjectIds = @(), [switch]$Apply
     )
     if ($DefaultConcurrency -gt $MaxConcurrency) { throw 'DefaultConcurrency cannot exceed MaxConcurrency.' }
+    if ($PrototypeReporting -and $LockDownReporting) { throw 'Choose either PrototypeReporting or LockDownReporting, not both.' }
     if ($LockDownReporting -and -not $AdminObjectIds.Count) { throw 'LockDownReporting requires explicit AdminObjectIds.' }
     foreach ($value in @($TenantId, $ClientId)) {
         $parsed = [guid]::Empty
@@ -237,8 +240,15 @@ function Initialize-SyncSharePoint {
         if (-not [guid]::TryParse($RuntimeAppId, [ref]$parsed) -or $parsed -eq [guid]::Empty) { throw 'GrantSiteAccess requires the runtime SPA application GUID.' }
     }
     Import-Module Microsoft.Graph.Authentication -MinimumVersion 2.37.0 -ErrorAction Stop
-    $scopes = if ($GrantSiteAccess) { @('Sites.FullControl.All') } else { @('Sites.Manage.All') }
+    [string[]]$scopes = if ($GrantSiteAccess) { @('Sites.FullControl.All') } else { @('Sites.Selected') }
     if ($LockDownReporting) { $scopes += 'User.ReadBasic.All' }
+    if ($GrantSiteAccess) {
+        Write-Host 'Explicit site-grant administration requests Graph Sites.FullControl.All. Use a separately authorized bootstrap operator; omit -GrantSiteAccess when app site grants already exist.'
+    } elseif ($PrototypeReporting) {
+        Write-Host 'Using delegated Graph Sites.Selected for prototype list provisioning. The app needs an existing site write grant; setup does not grant itself access.'
+    } else {
+        Write-Host 'Using delegated Graph Sites.Selected. The operator app must already have an explicit grant on the target site; full control is required for permission lockdown. Setup does not grant itself access.'
+    }
     Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -Scopes $scopes -ContextScope Process -NoWelcome -ErrorAction Stop | Out-Null
     $context = Get-MgContext
     if ($context.AuthType -ne 'Delegated' -or $context.TenantId -ne $TenantId -or $context.ClientId -ne $ClientId) {
@@ -308,6 +318,8 @@ function Initialize-SyncSharePoint {
     }
     if ($LockDownReporting) {
         Protect-SyncLists -TenantId $TenantId -ClientId $ClientId -SiteUrl $SiteUrl -Destination $destination -AdminObjectIds $AdminObjectIds -Apply:$Apply
+    } elseif ($PrototypeReporting) {
+        Write-Warning 'PROTOTYPE ONLY: app filtering is not a security boundary. Anyone with list read access may read other policies and user balances directly. Use trusted testers and non-sensitive test data only. No SharePoint group, list ACL or item ACL is created, changed or verified. Existing unique permissions are not reset; configure test-audience access explicitly.'
     } else { Write-Host 'WARNING: lists may inherit site access. Owner reporting remains disabled until explicit -LockDownReporting migration and API permission readback. Use a restricted site.' }
     Write-Host 'Configure list version history/retention explicitly in SharePoint.'
     if (-not $Apply) { Write-Host 'Preview only. Rerun with -Apply to provision; no Graph writes were made.' }
@@ -316,6 +328,10 @@ function Initialize-SyncSharePoint {
         Write-Output "SYNC_DEFAULT_CONCURRENCY=$DefaultConcurrency"
         Write-Output "SYNC_MAX_CONCURRENCY=$MaxConcurrency"
         Write-Output "SYNC_JOB_RETENTION_DAYS=$RetentionDays"
+        if ($PrototypeReporting) {
+            Write-Output 'REPORTING_ACCESS_MODE=prototype'
+            Write-Output 'REPORTING_SECURITY_ENABLED=false'
+        }
     }
 }
 

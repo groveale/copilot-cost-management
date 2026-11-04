@@ -1,4 +1,4 @@
-import type { ReportingSettings } from "../../api/src/reporting-contracts";
+import { reportingAccessMode, type ReportingSettings } from "../../api/src/reporting-contracts";
 import { guid, object, text } from "./config";
 import type { Fields } from "./details";
 import { GraphClient } from "./graph";
@@ -48,12 +48,15 @@ export class SharePointReporting {
   private readonly tenantId: string;
   constructor(private readonly graph: GraphClient, readonly settings: ReportingSettings, tenantId: string) {
     this.tenantId = guid(tenantId, "Tenant ID");
+    const accessMode = reportingAccessMode(settings.accessMode);
     if (settings.enabled !== true) throw new Error("SharePoint reporting is not configured. Ask an administrator to configure sync.");
     if (typeof settings.isAdmin !== "boolean" || typeof settings.securityReady !== "boolean" ||
         !Array.isArray(settings.policyIds) || settings.policyIds.some((id) => guid(id, "Authorized policy ID") !== id)) {
       throw new Error("Invalid SharePoint reporting access configuration.");
     }
-    if (!settings.isAdmin && !settings.securityReady) throw new Error("SharePoint owner permissions have not been verified. Ask an administrator to reconcile permissions.");
+    if (accessMode === "sharepoint-acl" && !settings.isAdmin && !settings.securityReady) {
+      throw new Error("SharePoint owner permissions have not been verified. Ask an administrator to reconcile permissions.");
+    }
   }
   private root(list: string) {
     return `/v1.0/sites/${encodeURIComponent(text(this.settings.siteId, "Reporting site ID"))}/lists/${guid(list, "Reporting list ID")}/items`;

@@ -21,7 +21,8 @@ class MemoryStore implements ReportingStore {
   async save(value: SecurityState) { this.value = structuredClone(value); }
   async locked<T>(operation: (assert: () => void, leaseId?: string) => Promise<T>) { return operation(this.assert, "metadata-lease"); }
 }
-const config: ReportingConfiguration = { enabled: true, tenantId: id(1), clientId: id(4), certificateId: "https://example.vault.azure.net/certificates/reporting/" + "a".repeat(32),
+const config: ReportingConfiguration = { enabled: true, accessMode: "sharepoint-acl", snapshotDestination: null,
+  tenantId: id(1), clientId: id(4), certificateId: "https://example.vault.azure.net/certificates/reporting/" + "a".repeat(32),
   admins: [admin.objectId], destination: { siteId: `example.sharepoint.com,${id(5)},${id(6)}`,
     siteUrl: "https://example.sharepoint.com/sites/reporting", policyListId: id(7), balanceListId: id(8), jobListId: id(9),
     adminGroupId: 20, maxScopes: 5000, scopeReserve: 250 } };
@@ -126,6 +127,66 @@ describe("ownership mutations", () => {
     await service.reconcile(admin, {});
     await service.mutateMetadata(metadata, "metadata-v1", write);
     expect(reconcile).toHaveBeenCalledOnce(); expect(store.value!.ready).toBe(false);
+  });
+});
+describe("explicit prototype app filtering", () => {
+  const prototype = () => new ReportingService(store, {
+    ...config, accessMode: "prototype", destination: null, certificateId: "",
+    snapshotDestination: { siteId: config.destination!.siteId, policyListId: id(7), balanceListId: id(8) },
+  }, true, () => { throw new Error("Prototype must never construct the ACL/OBO client."); }, async () => job);
+  it("discloses only API-derived owner policies without claiming ACL verification or using OBO", async () => {
+    const reporting = prototype();
+    expect(await reporting.settings(owner)).toEqual({ enabled: true, accessMode: "prototype",
+      siteId: config.destination!.siteId, policyListId: id(7), balanceListId: id(8),
+      isAdmin: false, policyIds: [id(11), id(13)], securityReady: false });
+    expect(await reporting.settings(admin)).toMatchObject({ isAdmin: true, policyIds: [], securityReady: false });
+    await expect(reporting.settings({ ...owner, objectId: id(99) })).rejects.toMatchObject({ status: 403 });
+    await expect(reporting.settings({ ...owner, tenantId: id(99) })).rejects.toMatchObject({ status: 403 });
+    await expect(reporting.reconcile(admin, {})).rejects.toMatchObject({ code: "reporting-prototype-mode" });
+    expect(store.value).toBeNull();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+  it("allows ownership edits with normal concurrency guards, invalidates ACL readiness and reflects current owners", async () => {
+    await service.reconcile(admin, {});
+    reconcile.mockClear();
+    const reporting = prototype();
+    const next = { ...metadata, budgets: [{ ...metadata.budgets[0], owners: [id(40)] }] };
+    const write = vi.fn(async (leaseId?: string) => {
+      expect(leaseId).toBe("metadata-lease");
+      expect(store.value?.ready).toBe(false);
+      store.snapshot = { metadata: next, etag: "metadata-v2" };
+    });
+    await expect(reporting.mutateMetadata(next, "stale", write)).rejects.toMatchObject({ code: "metadata-conflict" });
+    expect(write).not.toHaveBeenCalled();
+    await reporting.mutateMetadata(next, "metadata-v1", write);
+    await expect(reporting.settings(owner)).rejects.toMatchObject({ status: 403 });
+    expect(await reporting.settings({ ...owner, objectId: id(40) })).toMatchObject({ policyIds: [id(11), id(13)], securityReady: false });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect((await service.settings({ ...owner, objectId: id(40) })).securityReady).toBe(false);
+  });
+  it("requires an explicit valid mode, a complete sync destination and no ACL opt-in", () => {
+    const env = { TENANT_ID: id(1), API_AUDIENCE: id(4), ONBOARDING_ADMIN_OBJECT_IDS: admin.objectId,
+      SYNC_SITE_ID: config.destination!.siteId, SYNC_POLICY_LIST_ID: id(7), SYNC_BALANCE_LIST_ID: id(8), SYNC_JOB_LIST_ID: id(9) };
+    const normal = reportingConfiguration(syncSettings(env), env);
+    expect(normal).toMatchObject({ enabled: false, accessMode: "sharepoint-acl", destination: null });
+    const opted = { ...env, REPORTING_ACCESS_MODE: "prototype" };
+    expect(reportingConfiguration(syncSettings(opted), opted)).toMatchObject({ enabled: true, accessMode: "prototype",
+      certificateId: "", destination: null, snapshotDestination: { policyListId: id(7) } });
+    expect(() => reportingConfiguration(syncSettings(env), { ...env, REPORTING_ACCESS_MODE: "typo" })).toThrow("Invalid reporting access mode");
+    expect(() => reportingConfiguration(syncSettings(opted), { ...opted, REPORTING_SECURITY_ENABLED: "true" })).toThrow("cannot enable");
+    const empty = { TENANT_ID: id(1), API_AUDIENCE: id(4), REPORTING_ACCESS_MODE: "prototype" };
+    expect(reportingConfiguration(syncSettings(empty), empty).snapshotDestination).toBeNull();
+    expect(reportingConfiguration(syncSettings(opted), { ...opted, ONBOARDING_ADMIN_OBJECT_IDS: "" }).snapshotDestination).toBeNull();
+  });
+  it("does not bypass storage errors or lock loss when editing prototype ownership", async () => {
+    const write = vi.fn();
+    const save = vi.spyOn(store, "save").mockRejectedValueOnce(new Error("Cannot invalidate ACL marker"));
+    await expect(prototype().mutateMetadata(metadata, "metadata-v1", write)).rejects.toThrow("Cannot invalidate ACL marker");
+    expect(write).not.toHaveBeenCalled();
+    save.mockRestore();
+    store.assert.mockImplementation(() => { throw new Error("metadata lease lost"); });
+    await expect(prototype().mutateMetadata(metadata, "metadata-v1", write)).rejects.toThrow("metadata lease lost");
+    expect(write).not.toHaveBeenCalled();
   });
 });
 it("requires explicit complete configuration and enforces the 5,000-scope ceiling", () => {

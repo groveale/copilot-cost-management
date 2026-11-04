@@ -22,7 +22,7 @@ async function request(path: string, input?: unknown) {
   new InvocationContext({ functionName: "test", logHandler: vi.fn() }));
 }
 it("exposes only the typed settings contract to authenticated authorized owners", async () => {
-  const settings = { enabled: true, siteId: "site", policyListId: id(8), balanceListId: id(9), isAdmin: false, policyIds: [id(6)], securityReady: true };
+  const settings = { enabled: true, accessMode: "sharepoint-acl" as const, siteId: "site", policyListId: id(8), balanceListId: id(9), isAdmin: false, policyIds: [id(6)], securityReady: true };
   vi.spyOn(ReportingService.prototype, "settings").mockResolvedValue(settings);
   expect(await request("reporting/settings")).toMatchObject({ status: 200, jsonBody: settings, headers: { "Cache-Control": "no-store" } });
 });

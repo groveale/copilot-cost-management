@@ -29,22 +29,110 @@ or wait for expiry. Leases last 90 seconds and active execution renews them.
 
 ## Setup
 
+Choose the reporting access model before provisioning. **SharePoint ACL mode is
+the default.** The opt-in prototype path below skips ACL management entirely;
+the numbered setup that follows describes the isolated row-ACL path.
+
+### Trusted prototype: app filtering only
+
+Use this only for trusted testers and non-sensitive/test data. The API supplies
+current policy-owner mappings, and the portal queries/displays only the allowed
+policies. **This is not a security boundary:** anyone with read access to the
+reporting lists can bypass the portal and read other policies and user balances
+directly. API authorization for live actions, metadata and sync jobs is unchanged.
+Personal synced reporting remains administrator-only.
+
+1. Use an existing restricted test site. Give the sync administrator sufficient
+   list-provisioning/write access and the trusted reporting audience read access
+   to the policy/balance lists. Restrict write access and keep the job list
+   administrator-only where practical. The script does **not** broaden sharing,
+   reset existing unique permissions or verify the audience. Existing partial
+   ACL lockdowns can still prevent reads: app filtering never overrides a
+   SharePoint denial.
+2. The operator/portal app needs Graph delegated `Sites.Selected` consent and an
+   existing site grant that permits writes. No PnP connection, SharePoint
+   delegated permission-management scope, administrator group or reporting
+   certificate is needed on this path. Keep the existing live collection scopes
+   (`configure-entra.ps1 -EnableSync`) and private API administrator configuration.
+3. Preview, then apply:
+
+   ```powershell
+   $setup = @{
+       TenantId = '<tenant-guid>'
+       ClientId = '<approved-operator-public-client-guid>'
+       SiteUrl = 'https://contoso.sharepoint.com/sites/copilot-reporting'
+       PrototypeReporting = $true
+       RetentionDays = 30
+       DefaultConcurrency = 3
+       MaxConcurrency = 8
+   }
+   .\scripts\setup-sync-sharepoint.ps1 @setup
+   .\scripts\setup-sync-sharepoint.ps1 @setup -Apply
+   ```
+
+   Do not combine `PrototypeReporting` with `LockDownReporting`. Existing
+   app-managed lists are validated/reused; they are not recreated or emptied.
+4. Configure `SYNC_DESTINATION_JSON`, concurrency, retention and private storage
+   access as in steps 5-6 below. Set the private `REPORTING_SECURITY_JSON`
+   deployment configuration to:
+
+   ```json
+   { "accessMode": "prototype", "enabled": false }
+   ```
+
+   This passes through the existing reviewed/hash-bound infrastructure workflow.
+   The same object can be supplied as Bicep `reportingSecurity`. Its runtime
+   equivalents are `REPORTING_ACCESS_MODE=prototype` and
+   `REPORTING_SECURITY_ENABLED=false`, alongside the four sync destination
+   settings. No reporting certificate vault is provisioned for prototype mode;
+   certificate/group/site-URL settings are not required.
+5. Deploy the API and frontend together. Use **Validate access**, then **Start
+   sync**. Both admin sync and snapshot reports show a prototype warning.
+   **Verify SharePoint permissions** is hidden; its API rejects the operation
+   instead of pretending that ACLs are verified. Sync skips ACL reconciliation
+   but retains fresh Graph/PIM checks, leases and snapshot publication fences.
+   The settings endpoint always reports `securityReady: false` in prototype mode.
+   A mode change during publication pauses the run; refresh and resume.
+
+Only the server deployment selects this mode; it is not a browser preference.
+Unrecognized modes fail rather than falling back to prototype. Omitting the
+setting retains `sharepoint-acl` mode, including support for an older settings
+response that does not contain `accessMode`.
+
+**Before production:** remove prototype mode, provision the administrator group
+and exact list/item ACLs with `-LockDownReporting`, complete the OBO service
+configuration and consent, then run **Verify SharePoint permissions** and the
+live isolation acceptance tests below. Prototype ownership edits deliberately
+skip SharePoint revocation and invalidate the persisted ACL-ready marker.
+Changing back to ACL mode alone does not remove broad site/list access: complete
+the lockdown migration before treating data as isolated.
+
+### SharePoint row-ACL mode (default)
+
 1. Choose an **existing, restricted SharePoint site** for reporting. Do not use
    an employee-wide readable/writable site for identifiable balance data.
-2. Use an approved operator public-client registration with delegated
-   `Sites.Manage.All` for provisioning. The operator must also have sufficient
-   SharePoint rights. Explicit site-grant administration requires
-   `Sites.FullControl.All` and an appropriately authorized operator.
+2. Use an approved operator public-client registration with Microsoft Graph
+   delegated `Sites.Selected` and an existing explicit grant on the target site.
+   For list/item permission lockdown, also consent SharePoint delegated
+   `Sites.Selected` and grant the operator app **full control on that site**.
+   The signed-in operator must also have sufficient SharePoint rights;
+   ordinary write access is not permission-management access. Consent alone does
+   not create a site grant, and `Sites.Selected` cannot grant itself site access.
+   Graph and SharePoint are separate token resources. No app-only permission,
+   client secret or certificate is needed for interactive setup.
 3. Configure the runtime SPA's additional delegated permissions:
 
    ```powershell
-   .\scripts\configure-entra.ps1 -SpaClientId '<spa-app-id>' -EnableSync -EnableReportingSecurity
-   .\scripts\configure-entra.ps1 -SpaClientId '<spa-app-id>' -EnableSync -EnableReportingSecurity -Apply
+   .\scripts\configure-entra.ps1 -SpaClientId '<spa-app-id>' -EnableSync
+   .\scripts\configure-entra.ps1 -SpaClientId '<spa-app-id>' -EnableSync -Apply
    ```
 
    This preserves existing permissions/callbacks. Arrange admin consent through
    the organization's approval process. Adding required permissions is not itself
-   consent or PIM activation.
+   consent or PIM activation. Configure the setup app's SharePoint `Sites.Selected`
+   and Graph `User.ReadBasic.All` separately. The permission-service API
+   registration and its current consent requirements are a separate step below;
+   `-EnableReportingSecurity` is not required to run this setup script.
 
 4. Preview, then apply list setup using PowerShell 7.4+ and the existing
    `Microsoft.Graph.Authentication` module, version 2.37.0 or later:
@@ -55,7 +143,6 @@ or wait for expiry. Leases last 90 seconds and active execution renews them.
        ClientId = '<approved-operator-public-client-guid>'
        SiteUrl = 'https://contoso.sharepoint.com/sites/copilot-reporting'
        RuntimeAppId = '<runtime-spa-app-guid>'
-       GrantSiteAccess = $true
        LockDownReporting = $true
        AdminObjectIds = @('<same-admin-user-object-ids-as-the-private-API-configuration>')
        RetentionDays = 30
@@ -66,16 +153,26 @@ or wait for expiry. Leases last 90 seconds and active execution renews them.
    .\scripts\setup-sync-sharepoint.ps1 @setup -Apply
    ```
 
-   `GrantSiteAccess` is optional if a site administrator manages the explicit
-   grant separately. Runtime consent to `Sites.Selected` and the selected-site
-   **write** grant are both necessary. Delegated effective access is the
+   By default the script requests Graph `Sites.Selected`, plus
+   `User.ReadBasic.All` for lockdown. It does not enumerate, create or change app
+   site grants. Ensure the grants already exist: **full control** for the setup
+   app, **write** for a separate runtime SPA. Delegated effective access is the
    intersection of that app grant and the executing user's SharePoint rights.
+   If reusing the runtime SPA for setup, its site grant must temporarily support
+   full control; review returning it to write after setup. That downgrade is an
+   explicit privileged operator action, not an automatic script side effect.
+
+   Only use `-GrantSiteAccess -RuntimeAppId '<runtime-spa-app-guid>'` with a
+   separately approved bootstrap operator when an app site grant still needs
+   creating. This explicit option requests Graph `Sites.FullControl.All`;
+   it is not the selected-only path and grants the runtime app write, not setup
+   full control. The default never escalates to a tenant-wide scope on failure.
 
    Lockdown additionally uses `PnP.PowerShell` 3.1.0+ with an interactive
    delegated connection. The approved operator registration needs SharePoint
-   **AllSites.FullControl** (a SharePoint resource permission, not the similarly
-   named Graph scope), and the executing user must be a configured administrator
-   with sufficient site rights. Graph `User.ReadBasic.All` resolves the explicit
+   **Sites.Selected** (on the SharePoint resource as well as Microsoft Graph),
+   with site-specific full control, and the executing user must be a configured
+   administrator with sufficient site rights. Graph `User.ReadBasic.All` resolves the explicit
    administrator object IDs. Preview reports the destructive-to-access change
    without changing ACLs. Apply creates/reuses an app-marked SharePoint
    administrator group, sets its owner to a configured administrator, disallows
@@ -83,6 +180,11 @@ or wait for expiry. Leases last 90 seconds and active execution renews them.
    list grants. It resets **all existing item scopes**, including stale/staging
    generations, to the administrator-only list ACL and reads back the result.
    No rows or lists are deleted. Owners remain blocked until API verification.
+   A live delegated `Sites.Selected` test in the current tenant denied group
+   creation despite the user's group-management rights and the app's site
+   `fullcontrol` grant. Selected-only group/ACL setup is therefore not verified
+   end to end; a group-creation failure must not be treated as successful
+   lockdown or evidence that later row-ACL operations will work.
 
    The script creates/verifies the lists, types and indexes; it does not delete
    or recreate incompatible lists. Rerunning is supported. Review partial setup
@@ -251,8 +353,11 @@ and generations, and shows dated normalized observations/freshness/exclusions.
 It makes no directory-name lookups and never falls back to live Cost Management
 APIs after missing, denied, stale or inconsistent snapshot data. Switching
 source/account discards in-flight responses. Owners are blocked until current
-server ownership and persisted permission verification agree; administrators
-can inspect/recover configuration. **Personal Sync is administrator-only in v1.**
+server ownership and persisted permission verification agree in the default
+`sharepoint-acl` mode; administrators can inspect/recover configuration.
+Explicit `prototype` mode uses the API-derived policy allowlist without ACL
+verification and displays the direct-list-access warning, even for empty
+reports. **Personal Sync is administrator-only in v1 in both modes.**
 
 Requests, approvals, onboarding and owner actions remain live. Owner actions
 require explicit fresh live consent/authorization, even when viewing Sync.

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Caller, Metadata } from "./contracts.js";
-import type { ReportingSettings } from "./reporting-contracts.js";
+import { reportingAccessMode, type ReportingAccessMode, type ReportingSettings } from "./reporting-contracts.js";
 import type { SyncJob, SyncSettings } from "./sync-contracts.js";
 import { ApiError, uuid } from "./model.js";
 import type { PermissionDestination, ReportingPermissions } from "./reporting-sharepoint.js";
@@ -20,10 +20,14 @@ export interface ReportingStore {
 }
 export interface ReportingConfiguration {
   enabled: boolean; destination: PermissionDestination | null; tenantId: string; clientId: string; certificateId: string; admins: string[];
+  accessMode: ReportingAccessMode;
+  snapshotDestination: Pick<SyncSettings, "siteId" | "policyListId" | "balanceListId"> | null;
 }
 export function reportingConfiguration(sync: SyncSettings, env: NodeJS.ProcessEnv = process.env): ReportingConfiguration {
   const admins = [...new Set((env.ONBOARDING_ADMIN_OBJECT_IDS ?? "").split(",").filter((id) => id.trim()).map((id) => uuid.parse(id.trim())))].sort();
+  const accessMode = reportingAccessMode(env.REPORTING_ACCESS_MODE);
   const enabled = env.REPORTING_SECURITY_ENABLED === "true";
+  if (accessMode === "prototype" && enabled) throw new Error("Prototype reporting cannot enable SharePoint ACL management. Set REPORTING_SECURITY_ENABLED=false.");
   const certificateId = env.REPORTING_CERTIFICATE_ID?.trim() ?? "";
   const siteUrl = env.REPORTING_SITE_URL?.trim().replace(/\/$/, "") ?? "";
   const groupId = env.REPORTING_ADMIN_GROUP_ID ?? "";
@@ -47,7 +51,11 @@ export function reportingConfiguration(sync: SyncSettings, env: NodeJS.ProcessEn
     destination = { ...sync, siteUrl, adminGroupId: Number(groupId),
       maxScopes: numeric("REPORTING_MAX_SCOPES", 5000, 5000), scopeReserve: numeric("REPORTING_SCOPE_RESERVE", 250, 4999) };
   }
-  return { enabled, destination, tenantId: uuid.parse(env.TENANT_ID), clientId: uuid.parse(env.API_AUDIENCE), certificateId, admins };
+  return { enabled: enabled || accessMode === "prototype", accessMode, destination,
+    snapshotDestination: sync.enabled && admins.length ? {
+      siteId: sync.siteId, policyListId: sync.policyListId, balanceListId: sync.balanceListId,
+    } : null,
+    tenantId: uuid.parse(env.TENANT_ID), clientId: uuid.parse(env.API_AUDIENCE), certificateId, admins };
 }
 export function policyOwners(metadata: Metadata | null): Map<string, string[]> {
   const owners = new Map<string, Set<string>>();
@@ -71,6 +79,9 @@ export class ReportingService {
     }
   }
   private configured() {
+    if (this.configuration.accessMode === "prototype") {
+      throw new ApiError(409, "reporting-prototype-mode", "Prototype reporting uses app filtering only. SharePoint row permissions are not managed or verified.");
+    }
     if (!this.configuration.enabled || !this.configuration.destination || !this.configuration.certificateId) {
       throw new ApiError(409, "reporting-not-configured",
         "Reporting permission provisioning is not configured. Explicitly enable it, configure the administrator group, certificate and SharePoint site, and grant delegated consent.");
@@ -86,6 +97,12 @@ export class ReportingService {
     const isAdmin = this.configuration.admins.includes(caller.objectId);
     const policyIds = [...policyOwners(snapshot.metadata)].filter(([, owners]) => owners.includes(caller.objectId)).map(([id]) => id);
     if (!isAdmin && !policyIds.length) throw new ApiError(403, "reporting-owner-required", "Reporting is available only to administrators and current policy owners.");
+    if (this.configuration.accessMode === "prototype") {
+      const destination = this.configuration.snapshotDestination;
+      return { enabled: Boolean(destination), accessMode: "prototype",
+        siteId: destination?.siteId ?? "", policyListId: destination?.policyListId ?? "",
+        balanceListId: destination?.balanceListId ?? "", isAdmin, policyIds: isAdmin ? [] : policyIds, securityReady: false };
+    }
     const state = await this.store.state();
     const expected = this.state(snapshot, true);
     const ready = Boolean(this.configuration.enabled && this.configuration.destination && snapshot.metadata && state?.ready &&
@@ -95,7 +112,7 @@ export class ReportingService {
     // not evidence that SharePoint ACLs have actually been read back.
     const destination = this.configuration.destination;
     const disclose = isAdmin || ready;
-    return { enabled: Boolean(this.configuration.enabled && destination),
+    return { enabled: Boolean(this.configuration.enabled && destination), accessMode: "sharepoint-acl",
       siteId: disclose ? destination?.siteId ?? "" : "", policyListId: disclose ? destination?.policyListId ?? "" : "",
       balanceListId: disclose ? destination?.balanceListId ?? "" : "", isAdmin, policyIds: isAdmin ? [] : policyIds, securityReady: ready };
   }
@@ -131,6 +148,11 @@ export class ReportingService {
     return this.store.locked(async (assertLock, metadataLeaseId) => {
       const before = await this.store.metadata();
       if (before.etag !== etag) throw new ApiError(409, "metadata-conflict", "Ownership metadata changed. Refresh and retry.");
+      if (this.configuration.accessMode === "prototype") {
+        await this.store.save(this.state(before, false));
+        assertLock(); await write(metadataLeaseId);
+        return;
+      }
       if (hash([...policyOwners(before.metadata)]) === hash([...policyOwners(next)])) {
         assertLock(); await write(metadataLeaseId);
         // Metadata ETag still changes, so require a fresh verification.

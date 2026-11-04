@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { SyncJob, SyncSettings, SyncUpdate } from "../../api/src/sync-contracts";
+import type { ReportingSettings } from "../../api/src/reporting-contracts";
 import { RequestApi } from "./api";
 import { DemoAuth } from "./auth";
 import { GraphError } from "./graph";
@@ -9,6 +10,7 @@ import { runSync } from "./sync-runner";
 const mocks = vi.hoisted(() => ({
   token: vi.fn(), inventory: vi.fn(), probe: vi.fn(), collect: vi.fn(), validate: vi.fn(), links: vi.fn(),
   mirror: vi.fn(), recover: vi.fn(), fence: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), absent: vi.fn(), security: vi.fn<RequestApi["reportingReconcile"]>(),
+  settings: vi.fn<RequestApi["reportingSettings"]>(),
 }));
 vi.mock("./auth", () => ({
   DemoAuth: class { syncToken = mocks.token; },
@@ -38,6 +40,7 @@ class Api extends RequestApi {
   override async onboardingCapabilities() { return { isAdmin: true, bootstrapEnabled: false, objectId: id(5) }; }
   override async onboardingSetup() { return null; }
   override reportingReconcile = mocks.security;
+  override reportingSettings = mocks.settings;
   override async syncUpdate(_id: string, input: SyncUpdate) {
     this.updates.push(input);
     if (input.action === "claim") { this.job.state = "running"; this.job.lease = { id: id(9), expiresAt: "2099-01-01T00:00:00Z" }; }
@@ -63,6 +66,9 @@ beforeEach(() => {
   mocks.probe.mockResolvedValue(["Live probe"]);
   mocks.validate.mockResolvedValue(["Lists verified"]);
   mocks.security.mockResolvedValue({ ready: true, checkedAt: original.createdAt, policies: 2, rows: 4 });
+  mocks.settings.mockResolvedValue({ enabled: true, accessMode: "sharepoint-acl",
+    siteId: settings.siteId, policyListId: settings.policyListId, balanceListId: settings.balanceListId,
+    isAdmin: true, policyIds: [], securityReady: true });
   mocks.links.mockResolvedValue([]);
   mocks.mirror.mockResolvedValue(undefined);
   mocks.collect.mockResolvedValue({ users: 1, groups: [], exclusions: 0, unsupported: false });
@@ -72,6 +78,41 @@ afterEach(() => vi.useRealTimers());
 const run = (api: Api, controller = new AbortController()) =>
   runSync(api, auth(), account, settings, api.job, controller.signal, vi.fn(), vi.fn());
 describe("browser sync orchestration", () => {
+  it("collects and publishes in explicit prototype mode without any ACL request while retaining lease heartbeats", async () => {
+    mocks.settings.mockResolvedValue({ enabled: true, accessMode: "prototype",
+      siteId: settings.siteId, policyListId: settings.policyListId, balanceListId: settings.balanceListId,
+      isAdmin: true, policyIds: [], securityReady: false });
+    mocks.security.mockRejectedValue(new Error("ACL service is deliberately unavailable"));
+    const api = new Api();
+    expect((await run(api)).state).toBe("completed");
+    expect(mocks.publish).toHaveBeenCalledTimes(2);
+    expect(mocks.security).not.toHaveBeenCalled();
+    expect(api.updates.filter((input) => input.action === "heartbeat").length).toBeGreaterThanOrEqual(6);
+  });
+  it("stops publication when access mode changes during a prototype run", async () => {
+    const base: ReportingSettings = { enabled: true, accessMode: "prototype",
+      siteId: settings.siteId, policyListId: settings.policyListId, balanceListId: settings.balanceListId,
+      isAdmin: true, policyIds: [], securityReady: false };
+    mocks.settings.mockResolvedValueOnce(base).mockResolvedValue({ ...base, accessMode: "sharepoint-acl" });
+    const api = new Api();
+    await expect(run(api)).rejects.toThrow("access mode changed");
+    expect(api.job.state).toBe("paused");
+    expect(api.updates.some((input) => input.action === "policy" && input.policy.state === "completed")).toBe(false);
+  });
+  it("does not bypass checks for disabled, invalid or mismatched reporting configuration", async () => {
+    const base = { enabled: true, accessMode: "prototype",
+      siteId: settings.siteId, policyListId: settings.policyListId, balanceListId: settings.balanceListId,
+      isAdmin: true, policyIds: [], securityReady: false };
+    for (const change of [{ enabled: false }, { isAdmin: false }, { siteId: "wrong-site" }, { accessMode: "typo" }]) {
+      const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ...base, ...change })));
+      const api = new Api();
+      mocks.settings.mockImplementation((signal) => new RequestApi("", async () => "unused", transport).reportingSettings(signal));
+      await expect(run(api)).rejects.toThrow();
+      expect(api.updates).toEqual([]);
+    }
+    expect(mocks.security).not.toHaveBeenCalled();
+    expect(mocks.collect).not.toHaveBeenCalled();
+  });
   it("freshly validates access, checkpoints every policy and publishes independent outcomes", async () => {
     const api = new Api();
     const result = await run(api);

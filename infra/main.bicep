@@ -25,7 +25,7 @@ param syncMaxConcurrency int = 8
 @maxValue(3650)
 param syncJobRetentionDays int = 30
 @secure()
-@description('Explicit reporting opt-in: enabled, siteUrl, adminGroupId and versioned certificateId. Contains no private key or secret.')
+@description('Reporting configuration. Default sharepoint-acl requires enabled, siteUrl, adminGroupId and versioned certificateId. Prototype opt-in: { accessMode: \'prototype\', enabled: false }; no ACL isolation. Contains no private key or secret.')
 param reportingSecurity object = {}
 
 var suffix = uniqueString(resourceGroup().id, prefix)
@@ -117,7 +117,8 @@ module network './network.bicep' = {
     businessStorageName: business.name
   }
 }
-var reportingEnabled = reportingSecurity.?enabled ?? false
+var reportingAccessMode = reportingSecurity.?accessMode ?? 'sharepoint-acl'
+var reportingEnabled = (reportingSecurity.?enabled ?? false) && reportingAccessMode == 'sharepoint-acl'
 var signingVaultName = '${take(prefix, 8)}-rpt-${take(suffix, 10)}'
 module reporting './reporting.bicep' = if (reportingEnabled) {
   name: 'reporting-certificate-vault'
@@ -208,6 +209,7 @@ resource api 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'SYNC_MAX_CONCURRENCY', value: string(syncMaxConcurrency) }
         { name: 'SYNC_JOB_RETENTION_DAYS', value: string(syncJobRetentionDays) }
         { name: 'REPORTING_SECURITY_ENABLED', value: reportingEnabled ? 'true' : 'false' }
+        { name: 'REPORTING_ACCESS_MODE', value: reportingAccessMode }
         { name: 'REPORTING_SITE_URL', value: reportingSecurity.?siteUrl ?? '' }
         { name: 'REPORTING_ADMIN_GROUP_ID', value: string(reportingSecurity.?adminGroupId ?? '') }
         { name: 'REPORTING_CERTIFICATE_ID', value: reportingSecurity.?certificateId ?? '' }

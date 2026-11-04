@@ -1,5 +1,6 @@
 import type { AccountInfo } from "@azure/msal-browser";
 import type { SyncJob, SyncSettings, SyncUpdate } from "../../api/src/sync-contracts";
+import { reportingAccessMode } from "../../api/src/reporting-contracts";
 import { ApiRequestError, RequestApi } from "./api";
 import { DemoAuth, isGraphInteractionRequired } from "./auth";
 import { GraphClient, GraphError, RequestScheduler } from "./graph";
@@ -13,19 +14,30 @@ export function syncClients(auth: DemoAuth, account: AccountInfo, settings: Sync
   const graph = new GraphClient(() => auth.syncToken(account), fetch.bind(globalThis), new RequestScheduler(concurrency));
   return { graph, reporting: new SharePointSync(graph, settings, account.tenantId) };
 }
+async function syncReportingMode(api: RequestApi, settings: SyncSettings, signal: AbortSignal) {
+  const reporting = await api.reportingSettings(signal);
+  const mode = reportingAccessMode(reporting.accessMode);
+  if (!reporting.enabled || !reporting.isAdmin || reporting.siteId !== settings.siteId ||
+      reporting.policyListId !== settings.policyListId || reporting.balanceListId !== settings.balanceListId) {
+    throw new Error("Administrator reporting configuration does not match the sync destination. Refresh configuration before syncing.");
+  }
+  return mode;
+}
 export async function validateSyncAccess(api: RequestApi, auth: DemoAuth, account: AccountInfo,
   settings: SyncSettings, concurrency: number, signal: AbortSignal, policyId?: string) {
   if (!settings.enabled) throw new Error("Provision and configure the SharePoint sync destination first.");
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > settings.maxConcurrency) throw new Error("Invalid sync concurrency.");
   const capabilities = await api.onboardingCapabilities(signal);
   if (!capabilities.isAdmin) throw new Error("Administrator access is required.");
-  await api.reportingReconcile(signal);
+  const accessMode = await syncReportingMode(api, settings, signal);
+  if (accessMode === "sharepoint-acl") await api.reportingReconcile(signal);
   await auth.syncToken(account, true);
   const { graph, reporting } = syncClients(auth, account, settings, concurrency);
   const policies = await policyInventory(graph, signal, policyId);
   const checks = [...await reporting.validate(signal), ...await probeCollectionAccess(graph, policies, signal)];
+  if (accessMode === "prototype") checks.push("Prototype: app filtering only. SharePoint row permissions are not managed; direct list access can expose other policies.");
   const links = await reporting.links(signal);
-  return { graph, reporting, policies, checks, links };
+  return { graph, reporting, policies, checks, links, accessMode };
 }
 export async function mirrorSyncJob(api: RequestApi, reporting: SharePointSync, job: SyncJob, signal: AbortSignal) {
   await reporting.mirror(job, signal);
@@ -102,7 +114,12 @@ export async function runSync(api: RequestApi, auth: DemoAuth, account: AccountI
       await access.reporting.publish(fence, snapshot, descriptor, job, metadata, signal,
         async () => {
           await update({ action: "heartbeat", leaseId });
-          await api.reportingReconcile(signal, { policyId: descriptor.id, jobId: job.id, leaseId });
+          if (await syncReportingMode(api, settings, signal) !== access.accessMode) {
+            throw new Error("Reporting access mode changed during sync. Refresh configuration and resume.");
+          }
+          if (access.accessMode === "sharepoint-acl") {
+            await api.reportingReconcile(signal, { policyId: descriptor.id, jobId: job.id, leaseId });
+          }
           await update({ action: "heartbeat", leaseId });
         });
       let cleanupRequired = false;

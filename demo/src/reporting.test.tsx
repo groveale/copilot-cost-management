@@ -5,9 +5,10 @@ import { RequestApi } from "./api";
 import { GraphClient } from "./graph";
 import { SharePointReporting } from "./reporting";
 import { loadSnapshotReports, SnapshotPolicyPanel } from "./SnapshotReports";
+import { ReportingAccessNotice } from "./ReportingAccessNotice";
 
 const id = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const settings: ReportingSettings = { enabled: true, siteId: `example.sharepoint.com,${id(2)},${id(3)}`,
+const settings: ReportingSettings = { enabled: true, accessMode: "sharepoint-acl", siteId: `example.sharepoint.com,${id(2)},${id(3)}`,
   policyListId: id(4), balanceListId: id(5), isAdmin: true, policyIds: [], securityReady: true };
 const tenant = id(1), policyId = id(6), snapshotId = id(7), userId = id(8), jobId = id(9), groupId = id(10);
 const time = "2026-11-04T12:00:00Z";
@@ -42,6 +43,52 @@ function fixture() {
 }
 const signal = () => new AbortController().signal;
 describe("delegated active-generation reporting", () => {
+  it("allows prototype owner reads without ACL readiness but retains policy filtering and authorization checks", async () => {
+    const { graph, transport } = fixture();
+    const prototype: ReportingSettings = { ...settings, accessMode: "prototype", securityReady: false, isAdmin: false, policyIds: [policyId] };
+    const reader = new SharePointReporting(graph, prototype, tenant);
+    expect((await reader.inventory(signal())).map((row) => row.id)).toEqual([policyId]);
+    expect((await reader.read(policyId, signal())).observations).toHaveLength(1);
+    expect(transport.mock.calls.every(([url]) =>
+      /fields\/(?:PolicyKey|SnapshotKey) eq '/.test(new URL(String(url)).searchParams.get("$filter")!))).toBe(true);
+    transport.mockClear();
+    await expect(reader.read(id(99), signal())).rejects.toThrow("not authorized");
+    expect(transport).not.toHaveBeenCalled();
+    expect(renderToStaticMarkup(<ReportingAccessNotice accessMode="prototype" />)).toContain("read other policies and user balances directly");
+    expect(renderToStaticMarkup(<ReportingAccessNotice accessMode="sharepoint-acl" />)).toBe("");
+  });
+  it("rejects foreign policy rows even when a prototype list query returns them", async () => {
+    const { master } = fixture();
+    const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      value: [{ fields: { ...master, PolicyId: id(99), PolicyKey: `${tenant}:${id(99)}` } }],
+    })));
+    const reader = new SharePointReporting(new GraphClient(async () => "token", transport),
+      { ...settings, accessMode: "prototype", securityReady: false, isAdmin: false, policyIds: [policyId] }, tenant);
+    await expect(reader.inventory(signal())).rejects.toThrow("outside your authorized workspace");
+  });
+  it("defaults older settings to ACL enforcement and rejects unknown modes before any SharePoint request", async () => {
+    const { graph, transport } = fixture();
+    for (const mode of [undefined, "typo"]) {
+      const api = new RequestApi("", async () => "api", vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+        ...settings, isAdmin: false, securityReady: false, policyIds: [policyId], accessMode: mode,
+      }))));
+      await expect(loadSnapshotReports(api, graph, tenant, signal())).rejects.toThrow(
+        mode === undefined ? "not been verified" : "Invalid reporting access mode");
+    }
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it("reports prototype mode to the UI even with an empty inventory and still rejects personal owner reports", async () => {
+    const { graph, rows, transport } = fixture();
+    rows.set(settings.policyListId, []);
+    const prototype: ReportingSettings = { ...settings, accessMode: "prototype", isAdmin: false, policyIds: [policyId], securityReady: false };
+    const api = new RequestApi("", async () => "api", vi.fn<typeof fetch>(async () => new Response(JSON.stringify(prototype))));
+    const onSettings = vi.fn();
+    expect(await loadSnapshotReports(api, graph, tenant, signal(), { inventoryOnly: true, onSettings })).toEqual([]);
+    expect(onSettings).toHaveBeenCalledWith(prototype);
+    transport.mockClear();
+    await expect(loadSnapshotReports(api, graph, tenant, signal(), { userId })).rejects.toThrow("administrators only");
+    expect(transport).not.toHaveBeenCalled();
+  });
   it("reads only the active generation and renders normalized observations without claiming a live/full response", async () => {
     const { reader, rows, observation, transport } = fixture();
     rows.get(settings.balanceListId)!.push({ ...observation, SnapshotId: id(30), SnapshotKey: `${policyKey}:${id(30)}`, ConsumedQuantity: 900 });

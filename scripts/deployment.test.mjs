@@ -123,3 +123,25 @@ test("reporting OBO is explicit, certificate-sign-only and has no secret export 
   const api = await read("api/src/functions.ts");
   assert.match(api, /Access-Control-Expose-Headers.*WWW-Authenticate/);
 });
+test("prototype reporting is an explicit reviewed opt-in, not ACL readiness or automatic sharing", async () => {
+  const main = await read("infra/main.bicep");
+  assert.match(main, /var reportingAccessMode = reportingSecurity\.\?accessMode \?\? 'sharepoint-acl'/);
+  assert.match(main, /var reportingEnabled = .*reportingAccessMode == 'sharepoint-acl'/);
+  assert.match(main, /name: 'REPORTING_ACCESS_MODE', value: reportingAccessMode/);
+  const workflow = await read(".github/workflows/infra.yml");
+  const command = workflow.split("\n").find((line) => line.includes("const r=JSON.parse(process.env.REPORTING_SECURITY_JSON)"));
+  const script = command.match(/node -e '(.*)'/)[1];
+  const validate = new Function("process", script);
+  const configuration = (value) => ({ env: { REPORTING_SECURITY_JSON: JSON.stringify(value) } });
+  for (const value of [{}, { accessMode: "prototype", enabled: false },
+    { enabled: true, siteUrl: "https://example.sharepoint.com/sites/reporting", adminGroupId: 20, certificateId: "certificate" }]) {
+    assert.doesNotThrow(() => validate(configuration(value)));
+  }
+  for (const value of [{ accessMode: "typo" }, { accessMode: "prototype", enabled: true },
+    { accessMode: "prototype" }, { enabled: true }, { unexpected: true }]) {
+    assert.throws(() => validate(configuration(value)), /Invalid reporting configuration/);
+  }
+  const setup = await read("scripts/setup-sync-sharepoint.ps1");
+  assert.match(setup, /PrototypeReporting -and \$LockDownReporting/);
+  assert.match(setup, /Existing unique permissions are not reset/);
+});

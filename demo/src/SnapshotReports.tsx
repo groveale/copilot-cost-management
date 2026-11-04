@@ -6,13 +6,16 @@ import { formatField, formatQuantity, formatTime } from "./details";
 import { GraphClient, GraphError } from "./graph";
 import { SharePointReporting, type SnapshotPolicy, type SnapshotReading } from "./reporting";
 import { parallelMap } from "./sync-collector";
+import { reportingAccessMode, type ReportingAccessMode, type ReportingSettings } from "../../api/src/reporting-contracts";
+import { ReportingAccessNotice } from "./ReportingAccessNotice";
 
 type Report = { policy: SnapshotPolicy; observations: SnapshotReading["observations"] | null };
 export async function loadSnapshotReports(api: RequestApi, graph: GraphClient, tenantId: string, signal: AbortSignal,
-  options: { policyIds?: string[]; inventoryOnly?: boolean; userId?: string } = {}): Promise<Report[]> {
+  options: { policyIds?: string[]; inventoryOnly?: boolean; userId?: string; onSettings?: (settings: ReportingSettings) => void } = {}): Promise<Report[]> {
   const settings = await api.reportingSettings(signal);
   if (options.userId && !settings.isAdmin) throw new Error("Personal synced balances are available to administrators only in v1.");
   const reader = new SharePointReporting(graph, settings, tenantId);
+  options.onSettings?.(settings);
   const selected = (reading: SnapshotReading): Report => ({ ...reading,
     observations: options.userId ? reading.observations.filter((row) => row.userId === options.userId) : reading.observations });
   if (options.policyIds) return parallelMap(options.policyIds, 3, async (id) => selected(await reader.read(id, signal)));
@@ -87,6 +90,7 @@ export function SnapshotReports({ api, auth, account, policyIds, inventoryOnly, 
   const [reports, setReports] = useState<Report[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [accessMode, setAccessMode] = useState<ReportingAccessMode | null>(null);
   const challenges = useRef<{ api?: string; graph?: string }>({});
   const controller = useRef<AbortController | null>(null);
   const selection = policyIds?.join(",");
@@ -97,7 +101,7 @@ export function SnapshotReports({ api, auth, account, policyIds, inventoryOnly, 
   async function load(interactive = false) {
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
-    setReports(null); setBusy(true); setError("");
+    setReports(null); setBusy(true); setError(""); setAccessMode(null);
     try {
       if (interactive) {
         await auth.refreshApi(account, challenges.current.api);
@@ -106,7 +110,9 @@ export function SnapshotReports({ api, auth, account, policyIds, inventoryOnly, 
       }
       current.signal.throwIfAborted();
       const reports = await loadSnapshotReports(api, new GraphClient(() => auth.reportingToken(account)),
-        account.tenantId, current.signal, { policyIds, inventoryOnly, userId });
+        account.tenantId, current.signal, { policyIds, inventoryOnly, userId, onSettings: (settings) => {
+          if (!current.signal.aborted) setAccessMode(reportingAccessMode(settings.accessMode));
+        } });
       if (!current.signal.aborted) { setReports(reports); challenges.current = {}; }
     } catch (error) {
       if (!current.signal.aborted) {
@@ -120,13 +126,15 @@ export function SnapshotReports({ api, auth, account, policyIds, inventoryOnly, 
     <div className="card"><h2>{userId ? "Your synced usage and balance" : inventoryOnly ? "Synced spending policies" : "Synced policy details"}</h2>
       <p className="muted">Delegated SharePoint reporting. No live Cost Management calls are made for these readings.
         Actions use live APIs; snapshots remain unchanged until the next successful sync.</p>
+      <ReportingAccessNotice accessMode={accessMode} />
       <div className="actions">
         <button disabled={busy} onClick={() => void load()}>Refresh snapshots</button>
         {error && <button disabled={busy} onClick={() => void load(true)}>Refresh sign-in / SharePoint access</button>}
       </div>
       {busy && <p role="status">Reading SharePoint snapshots...</p>}
       {error && <p className="error" role="alert">{error}</p>}
-      {reports?.length === 0 && <p className="notice">No SharePoint snapshots are available to this account. Ask an administrator to sync and verify permissions.</p>}
+      {reports?.length === 0 && <p className="notice">No SharePoint snapshots are available to this account. Ask an administrator to sync and {
+        accessMode === "prototype" ? "check SharePoint list read access." : "verify permissions."}</p>}
       {reports && reports.length > 0 && <p className="small">{reports.length} SharePoint policy records in this selection.</p>}
       {userId && reports && <p className="small">Admin-only personal reporting, shown separately by discovery policy and observation time.
         Repeated users across policies are not summed. Request routing is unaffected.</p>}

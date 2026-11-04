@@ -11,7 +11,7 @@ BeforeAll {
         ClientId = '22222222-2222-4222-8222-222222222222'
         SiteUrl = 'https://example.sharepoint.com/sites/reporting'
     }
-    function Connect-MgGraph { param($TenantId, $ClientId, $Scopes, $ContextScope, [switch]$NoWelcome, $ErrorAction) }
+    function Connect-MgGraph { param($TenantId, $ClientId, [string[]]$Scopes, $ContextScope, [switch]$NoWelcome, $ErrorAction) }
     function Get-MgContext { throw 'Unexpected context lookup.' }
     function Invoke-MgGraphRequest { param($Method, $Uri, $OutputType, $ErrorAction, $Body, $ContentType); throw 'Unexpected request.' }
     function Connect-PnPOnline { param($Url, $Tenant, $ClientId, [switch]$Interactive, [switch]$ReturnConnection, $ErrorAction) }
@@ -56,9 +56,10 @@ Describe 'SharePoint sync setup preview and idempotence' {
     BeforeEach {
         $script:testLists = [Collections.Generic.List[object]]::new()
         $script:testGrants = [Collections.Generic.List[object]]::new()
+        $script:requestedScopes = [Collections.Generic.List[object]]::new()
         $script:writes = 0
         Mock Import-Module {}
-        Mock Connect-MgGraph {}
+        Mock Connect-MgGraph { param($Scopes); $script:requestedScopes.Add(@($Scopes)) }
         Mock Get-MgContext { @{ AuthType = 'Delegated'; TenantId = '11111111-1111-4111-8111-111111111111'; ClientId = '22222222-2222-4222-8222-222222222222' } }
         Mock Invoke-SyncGraph {
             param($Method, $Path, $Body)
@@ -89,6 +90,27 @@ Describe 'SharePoint sync setup preview and idempotence' {
     It 'makes no provisioning writes in preview' {
         Initialize-SyncSharePoint @connection
         $script:writes | Should -Be 0
+        Should -Invoke Connect-MgGraph -Times 1 -Exactly
+        ($script:requestedScopes[0] -join ',') | Should -Be 'Sites.Selected'
+        Should -Invoke Invoke-SyncGraph -Times 0 -ParameterFilter { $Path -like '*/permissions*' }
+    }
+    It 'requests selected site access and basic user reads for permission lockdown without tenant-wide site scopes' {
+        Mock Protect-SyncLists {}
+        Initialize-SyncSharePoint @connection -LockDownReporting -AdminObjectIds @('44444444-4444-4444-8444-444444444444')
+        Should -Invoke Connect-MgGraph -Times 1 -Exactly
+        ($script:requestedScopes[0] -join ',') | Should -Be 'Sites.Selected,User.ReadBasic.All'
+        Should -Invoke Invoke-SyncGraph -Times 0 -ParameterFilter { $Path -like '*/permissions*' }
+        Should -Invoke Protect-SyncLists -Times 1 -Exactly
+    }
+    It 'fails visibly when selected-site access is missing, without provisioning or requesting broader scopes' {
+        Mock Invoke-SyncGraph { throw 'Access denied: app selected-site grant is missing.' } -ParameterFilter {
+            $Path -match '/sites/example\.sharepoint\.com:'
+        }
+        { Initialize-SyncSharePoint @connection -Apply } | Should -Throw '*selected-site grant is missing*'
+        $script:writes | Should -Be 0
+        Should -Invoke Connect-MgGraph -Times 1 -Exactly
+        ($script:requestedScopes[0] -join ',') | Should -Be 'Sites.Selected'
+        Should -Invoke Invoke-SyncGraph -Times 0 -ParameterFilter { $Method -in @('POST', 'PATCH', 'DELETE') }
     }
     It 'creates once and verifies existing lists on rerun' {
         $first = @(Initialize-SyncSharePoint @connection -Apply)
@@ -96,6 +118,28 @@ Describe 'SharePoint sync setup preview and idempotence' {
         $script:writes | Should -Be 3
         Initialize-SyncSharePoint @connection -Apply | Out-Null
         $script:writes | Should -Be 3
+    }
+    It 'provisions explicit prototype lists without PnP, ACL changes or extra scopes and is idempotent' {
+        Mock Protect-SyncLists { throw 'Prototype must not run lockdown.' }
+        Mock Connect-PnPOnline { throw 'Prototype must not connect to SharePoint CSOM.' }
+        $output = @(Initialize-SyncSharePoint @connection -PrototypeReporting -Apply)
+        $output | Should -Contain 'REPORTING_ACCESS_MODE=prototype'
+        $output | Should -Contain 'REPORTING_SECURITY_ENABLED=false'
+        $output | Should -Not -Contain 'REPORTING_ADMIN_GROUP_ID=20'
+        $script:writes | Should -Be 3
+        Initialize-SyncSharePoint @connection -PrototypeReporting -Apply | Out-Null
+        $script:writes | Should -Be 3
+        ($script:requestedScopes[0] -join ',') | Should -Be 'Sites.Selected'
+        Should -Invoke Protect-SyncLists -Times 0
+        Should -Invoke Connect-PnPOnline -Times 0
+        Should -Invoke Invoke-SyncGraph -Times 0 -ParameterFilter { $Path -like '*/permissions*' }
+    }
+    It 'previews prototype provisioning without writes and rejects mixing access modes before connecting' {
+        Initialize-SyncSharePoint @connection -PrototypeReporting
+        $script:writes | Should -Be 0
+        Should -Invoke Connect-MgGraph -Times 1 -Exactly
+        { Initialize-SyncSharePoint @connection -PrototypeReporting -LockDownReporting -Apply } | Should -Throw '*not both*'
+        Should -Invoke Connect-MgGraph -Times 1 -Exactly
     }
     It 'rejects incompatible lists and invalid concurrency' {
         $script:testLists.Add(@{ id = 'bad'; displayName = 'CopilotSpendingPolicies'; description = 'unrelated' })
@@ -107,6 +151,9 @@ Describe 'SharePoint sync setup preview and idempotence' {
         $script:testGrants.Count | Should -Be 1
         Initialize-SyncSharePoint @connection -RuntimeAppId '99999999-9999-4999-8999-999999999999' -GrantSiteAccess -Apply | Out-Null
         $script:testGrants.Count | Should -Be 1
+        Should -Invoke Connect-MgGraph -Times 2 -Exactly
+        ($script:requestedScopes[0] -join ',') | Should -Be 'Sites.FullControl.All'
+        ($script:requestedScopes[1] -join ',') | Should -Be 'Sites.FullControl.All'
     }
 }
 Describe 'SharePoint setup request boundaries' {

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { SyncJob, SyncSettings } from "../../api/src/sync-contracts";
+import { reportingAccessMode, type ReportingAccessMode } from "../../api/src/reporting-contracts";
 import { ApiRequestError, RequestApi } from "./api";
 import { DemoAuth } from "./auth";
 import { guid } from "./config";
 import { GraphError } from "./graph";
 import { mirrorSyncJob, runSync, syncClients, validateSyncAccess } from "./sync-runner";
 import { useOperationLock } from "./OperationLock";
+import { ReportingAccessNotice } from "./ReportingAccessNotice";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const terminal = (job: SyncJob) => ["completed", "completed-with-exclusions", "partially-failed", "failed", "cancelled"].includes(job.state);
@@ -32,6 +34,7 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
   api: RequestApi; auth: DemoAuth; account: AccountInfo; selectedPolicyId?: string;
 }) {
   const [settings, setSettings] = useState<SyncSettings | null>(null);
+  const [accessMode, setAccessMode] = useState<ReportingAccessMode | null>(null);
   const [job, setJob] = useState<SyncJob | null>(null);
   const [history, setHistory] = useState<SyncJob[]>([]);
   const [cursor, setCursor] = useState<string>();
@@ -59,7 +62,8 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
     const config = await api.syncSettings(signal);
     setSettings(config); setConcurrency(config.defaultConcurrency);
     if (!config.enabled) return;
-    const [page, active] = await Promise.all([api.syncJobs(signal), api.syncCurrent(signal)]);
+    const [page, active, reporting] = await Promise.all([api.syncJobs(signal), api.syncCurrent(signal), api.reportingSettings(signal)]);
+    setAccessMode(reportingAccessMode(reporting.accessMode));
     setHistory(page.items); setCursor(page.cursor); setJob(active);
   }
   async function act(operation: (signal: AbortSignal) => Promise<void>) {
@@ -88,6 +92,7 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
     {!settings && !error && <p role="status">Loading sync configuration...</p>}
     {settings && !settings.enabled && <p className="notice">SharePoint sync is not configured. An operator must run the SharePoint setup script and deploy its destination settings.</p>}
     {settings?.enabled && <>
+      <ReportingAccessNotice accessMode={accessMode} />
       <p className="small">Destination site: {settings.siteId}. Job history retention: {settings.retentionDays} days.
         Policy and balance reporting retains only the latest successful snapshot per policy.</p>
       <div className="actions">
@@ -96,10 +101,10 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
           onChange={(event) => setConcurrency(Number(event.target.value))} /></label>
       </div>
       <div className="actions">
-        <button disabled={busy} onClick={() => void act(async (signal) => {
+        {accessMode === "sharepoint-acl" && <button disabled={busy} onClick={() => void act(async (signal) => {
           const result = await api.reportingReconcile(signal);
           setChecks([`SharePoint row permissions verified: ${result.policies} policies, ${result.rows} rows, ${result.checkedAt}.`]);
-        })}>Verify SharePoint permissions</button>
+        })}>Verify SharePoint permissions</button>}
         <button disabled={busy} onClick={() => void act(async (signal) => {
           const access = await validateSyncAccess(api, auth, account, settings, concurrency, signal, policyId ? guid(policyId, "Policy ID") : undefined);
           setChecks(access.checks); setLinks(access.links); setClaims(undefined);
