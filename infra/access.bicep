@@ -9,6 +9,8 @@ param infraPrincipalId string
 param appPrincipalId string
 @description('Optional authorized seed operator object ID; no key credentials.')
 param seedOperatorId string = ''
+@description('Dedicated reporting signing vault from main outputs; empty disables reporting signing access.')
+param reportingVaultName string = ''
 
 resource api 'Microsoft.Web/sites@2024-04-01' existing = { name: functionName }
 resource host 'Microsoft.Storage/storageAccounts@2023-05-01' existing = { name: hostStorageName }
@@ -46,6 +48,35 @@ resource syncCheckpoints 'Microsoft.Storage/storageAccounts/blobServices/contain
   name: 'sync-checkpoints'
 }
 resource insights 'Microsoft.Insights/components@2020-02-02' existing = { name: insightsName }
+resource reportingVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = if (!empty(reportingVaultName)) {
+  name: reportingVaultName
+}
+resource reportingSignerRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = if (!empty(reportingVaultName)) {
+  name: guid(resourceGroup().id, 'copilot-reporting-certificate-sign')
+  properties: {
+    roleName: '${resourceGroup().name} reporting certificate signer'
+    description: 'Read public certificates and sign digests only in the dedicated reporting vault. No secret/private-key retrieval or key management.'
+    type: 'CustomRole'
+    assignableScopes: [ resourceGroup().id ]
+    permissions: [
+      {
+        actions: []
+        notActions: []
+        dataActions: [ 'Microsoft.KeyVault/vaults/certificates/read', 'Microsoft.KeyVault/vaults/keys/sign/action' ]
+        notDataActions: []
+      }
+    ]
+  }
+}
+resource reportingSigner 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(reportingVaultName)) {
+  scope: reportingVault
+  name: guid(reportingVault.id, functionPrincipalId, 'reporting-certificate-signer')
+  properties: {
+    principalId: functionPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: reportingSignerRole.id
+  }
+}
 
 var blobOwner = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
 var blobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'

@@ -18,6 +18,10 @@ if (mode === "apply") {
   const token = new AzureCliCredential({ tenantId });
   const index = new TableClient(tableUrl, "RequesterBudgetIndex", token);
   const blob = new BlobServiceClient(blobUrl, token).getContainerClient("metadata").getBlockBlobClient("budgets.json");
+  const security = new BlobServiceClient(blobUrl, token).getContainerClient("metadata").getBlockBlobClient("reporting-security.json");
+  if (await security.exists()) {
+    throw new Error("Reporting security has been initialized. Direct metadata seeding is blocked; use the authenticated administrator bootstrap API so old SharePoint grants are revoked before ownership changes.");
+  }
   // Metadata replacement is conditional: concurrent operator edits must not be lost.
   const current = await blob.exists() ? await blob.getProperties() : undefined;
   await blob.uploadData(Buffer.from(JSON.stringify(seed.metadata)), {

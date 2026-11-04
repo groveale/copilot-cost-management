@@ -16,6 +16,9 @@ vi.mock("@azure/storage-blob", () => ({
     getContainerClient() { return { getBlockBlobClient: () => ({ download: sdk.download, uploadData: sdk.uploadData }) }; }
   },
 }));
+vi.mock("../src/reporting-runtime.js", () => ({
+  guardMetadataWrite: async (_metadata: unknown, _etag: unknown, write: () => Promise<void>) => write(),
+}));
 import { AzureStore, isStorageNotFound, storageErrorCode } from "../src/storage.js";
 import { AzureOnboardingStore } from "../src/onboarding-storage.js";
 import { ApiError } from "../src/model.js";

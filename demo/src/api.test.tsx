@@ -10,6 +10,34 @@ vi.mock("@azure/msal-browser", () => ({
   PublicClientApplication: class { getActiveAccount() { return null; } getAllAccounts() { return []; } },
 }));
 afterEach(() => vi.unstubAllGlobals());
+it("keeps a saved Sync requester view away from live balance calls and exposes the settings cog", () => {
+  vi.stubGlobal("window", { location: { origin: "http://localhost:5173" },
+    localStorage: { getItem: (key: string) => key === "copilotReportingSource" ? "sync" : "light" } });
+  const config = parseConfig({ version: 1, tenantId: "10000000-0000-4000-8000-000000000001",
+    clientId: "10000000-0000-4000-8000-000000000002", serviceId: "cowork", budgets: [] });
+  const auth = new DemoAuth(config);
+  vi.spyOn(auth, "account").mockReturnValue({ tenantId: config.tenantId, homeAccountId: "home",
+    localAccountId: "10000000-0000-4000-8000-000000000003", environment: "login.microsoftonline.com", username: "user@example.test" });
+  const balance = vi.spyOn(auth, "balanceToken"), reporting = vi.spyOn(auth, "reportingToken");
+  const html = renderToStaticMarkup(<HostedPortal config={config} auth={auth} initialView="request" />);
+  expect(html).toContain('aria-label="Settings"');
+  expect(html).toContain("Sync / SharePoint");
+  expect(html).toContain("Checking administrator access for personal synced balances");
+  expect(html).not.toContain("Loading your balance from Graph");
+  expect(html).not.toContain("Your current usage and balance");
+  expect(balance).not.toHaveBeenCalled(); expect(reporting).not.toHaveBeenCalled();
+});
+it("preserves validated API downstream claims challenges for explicit PIM refresh", async () => {
+  const claims = JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" } } });
+  const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+    message: "Activate the required SharePoint permissions and renew sign-in.", code: "reporting-interaction-required",
+  }), { status: 401, headers: { "WWW-Authenticate": `Bearer error="insufficient_claims", claims="${btoa(claims)}"` } }));
+  const api = new RequestApi("https://example.test", async () => "synthetic-api-token", transport);
+  await expect(api.reportingReconcile(new AbortController().signal)).rejects.toMatchObject({
+    status: 401, code: "reporting-interaction-required", claims,
+  });
+  expect(String(transport.mock.calls[0][0])).toBe("https://example.test/api/v1/admin/reporting/security");
+});
 it("shows only login before authentication, never metadata or request fields", () => {
   vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
   const config = parseConfig({

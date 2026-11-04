@@ -102,6 +102,24 @@ describe("SharePoint generation publication", () => {
       async () => { throw new Error("Lease lost"); })).rejects.toThrow("Lease lost");
     expect(graph.rows.get(settings.policyListId)![0].fields.ActiveSnapshotId).toBeUndefined();
   });
+  it("uses a fresh conditional-write ETag after ACL-only verification without weakening the publication fence", async () => {
+    const { graph, reporting, snapshot, signal } = setup();
+    const fence = await reporting.fence(policy, job, signal);
+    await reporting.publish(fence, snapshot, policy, job, null, signal, async () => {
+      graph.rows.get(settings.policyListId)![0].eTag += "acl-change";
+    });
+    expect(await reporting.recover(policy, job, signal)).toMatchObject({ state: "completed" });
+  });
+  it.each(["FenceId", "ActiveSnapshotId", "Configuration"])("rejects a %s change during permission verification", async (field) => {
+    const { graph, reporting, snapshot, signal } = setup();
+    const fence = await reporting.fence(policy, job, signal);
+    await expect(reporting.publish(fence, snapshot, policy, job, null, signal, async () => {
+      const row = graph.rows.get(settings.policyListId)![0];
+      row.fields[field] = field === "Configuration" ? "{}" : id(90);
+      row.eTag += "concurrent-change";
+    })).rejects.toThrow("fence or content changed");
+    expect(graph.rows.get(settings.policyListId)![0].fields.ActiveSnapshotId).toBe(field === "ActiveSnapshotId" ? id(90) : undefined);
+  });
   it("keeps operational job history free of user balance and authentication data", async () => {
     const { graph, reporting, signal } = setup();
     await reporting.mirror(job, signal);

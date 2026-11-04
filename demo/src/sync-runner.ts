@@ -19,6 +19,7 @@ export async function validateSyncAccess(api: RequestApi, auth: DemoAuth, accoun
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > settings.maxConcurrency) throw new Error("Invalid sync concurrency.");
   const capabilities = await api.onboardingCapabilities(signal);
   if (!capabilities.isAdmin) throw new Error("Administrator access is required.");
+  await api.reportingReconcile(signal);
   await auth.syncToken(account, true);
   const { graph, reporting } = syncClients(auth, account, settings, concurrency);
   const policies = await policyInventory(graph, signal, policyId);
@@ -99,7 +100,11 @@ export async function runSync(api: RequestApi, auth: DemoAuth, account: AccountI
       }
       onProgress(job, `${descriptor.displayName}: Publishing SharePoint snapshot`);
       await access.reporting.publish(fence, snapshot, descriptor, job, metadata, signal,
-        async () => { await update({ action: "heartbeat", leaseId }); });
+        async () => {
+          await update({ action: "heartbeat", leaseId });
+          await api.reportingReconcile(signal, { policyId: descriptor.id, jobId: job.id, leaseId });
+          await update({ action: "heartbeat", leaseId });
+        });
       let cleanupRequired = false;
       try { await access.reporting.cleanupPolicy(descriptor.id, signal, async () => { await update({ action: "heartbeat", leaseId }); }); }
       catch (error) {

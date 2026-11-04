@@ -18,6 +18,13 @@ enabling sync. This does not add an unattended Graph worker or queue trigger.
   `sync-checkpoints` blobs. No Graph proxy or application
   Graph permissions. New BU provisioning/allocation and approved credit-request
   membership moves use delegated Graph in the administrator/owner browser.
+- Optional reporting ACL reconciliation uses certificate-backed **delegated OBO**,
+  a dedicated private Key Vault and restricted public-certificate-read/sign RBAC.
+  It does not grant application Graph/SharePoint access or export a private key.
+  Readiness is persisted against private ownership metadata, not an environment
+  flag. See [permission-service opt-in and upgrade](./admin-sync.md#permission-service-opt-in-and-upgrade)
+  for required consent, administrator-only list migration, scope limits and
+  separately authorized live acceptance.
 - UK South Application Insights/Log Analytics; 30-day retention, sampling and a
   small workspace ingestion cap. These are **not hard spending caps**.
 - Function runtime uses its **system-assigned managed identity** for host state,
@@ -93,6 +100,12 @@ eight-scope Graph token for owner operations.
 `-Apply` creates/reuses the API, preauthorizes only this SPA and preserves its
 existing Graph permissions. Rerun with `-SiteUrl <actual-origin> -Apply` after
 provisioning to add callbacks. It does not add Graph application permissions.
+`-EnableReportingSecurity` is a separate explicit opt-in adding downstream
+SharePoint **AllSites.FullControl** and Graph **User.ReadBasic.All** delegated
+permissions to the confidential API. It does not create certificates or grant
+consent. Register a nonexportable Key Vault certificate's public half on that
+API and configure its versioned URI; never put a private key or client secret
+in app settings, deployment artifacts or the SPA.
 
 ## Initial infrastructure
 

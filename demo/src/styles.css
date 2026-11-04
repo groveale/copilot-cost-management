@@ -93,6 +93,17 @@ button.secondary { background: var(--cp-surface); color: var(--cp-text); border-
 button.secondary:hover:not(:disabled) { background: var(--cp-surface-soft); }
 button:disabled { opacity: 0.55; cursor: not-allowed; }
 :focus-visible { outline: 3px solid var(--cp-link); outline-offset: 4px; }
+.settings-cog { display: inline-flex; gap: 8px; align-items: center; }
+.settings-dialog { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 28px; color: var(--cp-text); background: var(--cp-surface); border: 1px solid var(--cp-border-strong); border-radius: 16px; box-shadow: var(--cp-shadow); }
+.settings-dialog::backdrop { background: var(--cp-overlay); }
+.settings-dialog label { display: grid; gap: 8px; margin: 20px 0 12px; }
+.settings-dialog select { width: 100%; padding: 12px; border: 1px solid var(--cp-border-strong); border-radius: 8px; background: var(--cp-bg-elevated); color: var(--cp-text); font: inherit; }
+.settings-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.source-status { margin: 16px 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.snapshot-policy { margin-top: 20px; }
+.snapshot-policy table { width: 100%; border-collapse: collapse; text-align: left; }
+.snapshot-policy th, .snapshot-policy td { padding: 12px; border-bottom: 1px solid var(--cp-border); vertical-align: top; }
+.snapshot-policy caption { text-align: left; color: var(--cp-text-muted); margin-bottom: 12px; }
 .small, footer { font-size: 13px; }
 .muted, dt, footer { color: var(--cp-text-muted); }
 dl { margin: 16px 0; }

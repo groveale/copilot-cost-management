@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { AccountInfo } from "@azure/msal-browser";
 import type { SyncJob, SyncSettings } from "../../api/src/sync-contracts";
-import { RequestApi } from "./api";
+import { ApiRequestError, RequestApi } from "./api";
 import { DemoAuth } from "./auth";
 import { guid } from "./config";
 import { GraphError } from "./graph";
 import { mirrorSyncJob, runSync, syncClients, validateSyncAccess } from "./sync-runner";
+import { useOperationLock } from "./OperationLock";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const terminal = (job: SyncJob) => ["completed", "completed-with-exclusions", "partially-failed", "failed", "cancelled"].includes(job.state);
@@ -43,9 +44,11 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
   const [checks, setChecks] = useState<string[]>([]);
   const [notices, setNotices] = useState<string[]>([]);
   const [claims, setClaims] = useState<string>();
+  const [apiClaims, setApiClaims] = useState<string>();
   const [links, setLinks] = useState<{ label: string; url: string }[]>([]);
   const controller = useRef<AbortController | null>(null);
   const creation = useRef<{ key: string; id: string } | null>(null);
+  useOperationLock(busy);
   useEffect(() => {
     const request = new AbortController();
     void load(request.signal).catch((error: unknown) => { if (!request.signal.aborted) setError(message(error)); });
@@ -65,6 +68,7 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
     try { await operation(request.signal); }
     catch (error) {
       if (error instanceof GraphError && error.claims) setClaims(error.claims);
+      if (error instanceof ApiRequestError && error.claims) setApiClaims(error.claims);
       setError(request.signal.aborted ? "Sync paused. Refresh task status if a lease or reporting update could not be saved." : message(error));
     } finally { setBusy(false); setRunning(false); setPhase(""); }
   }
@@ -93,13 +97,18 @@ export function AdminSync({ api, auth, account, selectedPolicyId = "" }: {
       </div>
       <div className="actions">
         <button disabled={busy} onClick={() => void act(async (signal) => {
+          const result = await api.reportingReconcile(signal);
+          setChecks([`SharePoint row permissions verified: ${result.policies} policies, ${result.rows} rows, ${result.checkedAt}.`]);
+        })}>Verify SharePoint permissions</button>
+        <button disabled={busy} onClick={() => void act(async (signal) => {
           const access = await validateSyncAccess(api, auth, account, settings, concurrency, signal, policyId ? guid(policyId, "Policy ID") : undefined);
           setChecks(access.checks); setLinks(access.links); setClaims(undefined);
         })}>Validate access</button>
         <button disabled={busy} onClick={() => void act(async (signal) => {
+          await auth.refreshApi(account, apiClaims);
           await auth.refreshSync(account, claims);
           const access = await validateSyncAccess(api, auth, account, settings, concurrency, signal, policyId ? guid(policyId, "Policy ID") : undefined);
-          setChecks(access.checks); setLinks(access.links); setClaims(undefined);
+          setChecks(access.checks); setLinks(access.links); setClaims(undefined); setApiClaims(undefined);
         })}>Refresh access / sign in</button>
         <button disabled={busy || !!(job && !terminal(job))} onClick={() => void act(async (signal) => {
           const selected = policyId ? guid(policyId, "Policy ID") : undefined;

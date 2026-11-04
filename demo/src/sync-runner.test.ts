@@ -8,7 +8,7 @@ import { runSync } from "./sync-runner";
 
 const mocks = vi.hoisted(() => ({
   token: vi.fn(), inventory: vi.fn(), probe: vi.fn(), collect: vi.fn(), validate: vi.fn(), links: vi.fn(),
-  mirror: vi.fn(), recover: vi.fn(), fence: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), absent: vi.fn(),
+  mirror: vi.fn(), recover: vi.fn(), fence: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), absent: vi.fn(), security: vi.fn<RequestApi["reportingReconcile"]>(),
 }));
 vi.mock("./auth", () => ({
   DemoAuth: class { syncToken = mocks.token; },
@@ -37,6 +37,7 @@ class Api extends RequestApi {
   constructor() { super("", async () => "unused"); }
   override async onboardingCapabilities() { return { isAdmin: true, bootstrapEnabled: false, objectId: id(5) }; }
   override async onboardingSetup() { return null; }
+  override reportingReconcile = mocks.security;
   override async syncUpdate(_id: string, input: SyncUpdate) {
     this.updates.push(input);
     if (input.action === "claim") { this.job.state = "running"; this.job.lease = { id: id(9), expiresAt: "2099-01-01T00:00:00Z" }; }
@@ -61,6 +62,7 @@ beforeEach(() => {
   mocks.inventory.mockResolvedValue(policies);
   mocks.probe.mockResolvedValue(["Live probe"]);
   mocks.validate.mockResolvedValue(["Lists verified"]);
+  mocks.security.mockResolvedValue({ ready: true, checkedAt: original.createdAt, policies: 2, rows: 4 });
   mocks.links.mockResolvedValue([]);
   mocks.mirror.mockResolvedValue(undefined);
   mocks.collect.mockResolvedValue({ users: 1, groups: [], exclusions: 0, unsupported: false });
@@ -76,6 +78,8 @@ describe("browser sync orchestration", () => {
     expect(result.state).toBe("completed");
     expect(mocks.token).toHaveBeenCalledWith(account, true);
     expect(mocks.publish).toHaveBeenCalledTimes(2);
+    expect(mocks.security).toHaveBeenCalledTimes(3);
+    expect(mocks.security).toHaveBeenNthCalledWith(2, expect.any(AbortSignal), { policyId: policies[0].id, jobId: original.id, leaseId: id(9) });
     expect(mocks.absent).toHaveBeenCalledTimes(1);
     expect(api.updates.filter((input) => input.action === "policy" && input.policy.state === "completed")).toHaveLength(2);
     expect(vi.getTimerCount()).toBe(0);
@@ -113,6 +117,23 @@ describe("browser sync orchestration", () => {
     const api = new Api();
     await expect(run(api)).rejects.toThrow("No role");
     expect(api.updates).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("does not collect or claim work when SharePoint row isolation cannot be verified", async () => {
+    mocks.security.mockRejectedValue(new Error("SharePoint permission verification failed"));
+    const api = new Api();
+    await expect(run(api)).rejects.toThrow("permission verification failed");
+    expect(api.updates).toEqual([]);
+    expect(mocks.collect).not.toHaveBeenCalled();
+    expect(mocks.inventory).not.toHaveBeenCalled();
+  });
+  it("pauses without a completed policy checkpoint when staged-row permissions fail", async () => {
+    mocks.security.mockResolvedValueOnce({ ready: true, checkedAt: original.createdAt, policies: 2, rows: 0 })
+      .mockRejectedValueOnce(new Error("Owner ACL could not be verified"));
+    const api = new Api();
+    await expect(run(api)).rejects.toThrow("Owner ACL could not be verified");
+    expect(api.job.state).toBe("paused");
+    expect(api.updates.some((input) => input.action === "policy" && input.policy.state === "completed")).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

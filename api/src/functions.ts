@@ -10,15 +10,18 @@ import { OnboardingService } from "./onboarding-service.js";
 import { AzureOnboardingStore } from "./onboarding-storage.js";
 import { SyncService, syncCreateSchema, syncMaintenanceSchema, syncSettings, syncUpdateSchema } from "./sync.js";
 import { AzureSyncStore } from "./sync-storage.js";
+import { reportingService } from "./reporting-runtime.js";
+import { reportingSecuritySchema } from "./reporting.js";
+import { ReportingInteractionRequired } from "./reporting-auth.js";
 
-let dependencies: { service: RequestService; onboarding: OnboardingService; authenticate: ReturnType<typeof createAuthenticator> } | undefined;
+let dependencies: { service: RequestService; authenticate: ReturnType<typeof createAuthenticator> } | undefined;
 let sync: SyncService | undefined;
 function syncService(onboarding: OnboardingService) {
   return sync ??= new SyncService(new AzureSyncStore(uuid.parse(required("TENANT_ID")),
     required("BUSINESS_TABLE_URL"), required("BUSINESS_BLOB_URL"), credential()), syncSettings(),
     (caller) => onboarding.requireAdmin(caller));
 }
-function services() {
+function services(authorization: string | null) {
   if (!dependencies) {
     const tenantId = uuid.parse(required("TENANT_ID"));
     dependencies = {
@@ -28,12 +31,12 @@ function services() {
       service: new RequestService(new AzureStore(
         tenantId, required("BUSINESS_TABLE_URL"), required("BUSINESS_BLOB_URL"), credential(),
       )),
-      onboarding: new OnboardingService(new AzureOnboardingStore(
-        tenantId, required("BUSINESS_TABLE_URL"), required("BUSINESS_BLOB_URL"), credential(),
-      ), (process.env.ONBOARDING_ADMIN_OBJECT_IDS ?? "").split(",").filter((id) => id.trim()).map((id) => uuid.parse(id.trim()))),
     };
   }
-  return dependencies;
+  const onboarding = new OnboardingService(new AzureOnboardingStore(
+    uuid.parse(required("TENANT_ID")), required("BUSINESS_TABLE_URL"), required("BUSINESS_BLOB_URL"), credential(), authorization,
+  ), (process.env.ONBOARDING_ADMIN_OBJECT_IDS ?? "").split(",").filter((id) => id.trim()).map((id) => uuid.parse(id.trim())));
+  return { ...dependencies, onboarding };
 }
 async function body<T>(request: HttpRequest, schema: z.ZodType<T>, maxBytes = 12000): Promise<T> {
   if (!request.headers.get("content-type")?.startsWith("application/json")) {
@@ -50,15 +53,22 @@ async function body<T>(request: HttpRequest, schema: z.ZodType<T>, maxBytes = 12
 }
 export async function handler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const correlationId = randomUUID();
-  const headers = { "Cache-Control": "no-store", "X-Correlation-ID": correlationId, "X-Content-Type-Options": "nosniff" };
+  const headers = { "Cache-Control": "no-store", "X-Correlation-ID": correlationId, "X-Content-Type-Options": "nosniff",
+    "Access-Control-Expose-Headers": "WWW-Authenticate, X-Correlation-ID" };
   try {
-    const { authenticate, service, onboarding } = services();
+    const authorization = request.headers.get("authorization");
+    const { authenticate, service, onboarding } = services(authorization);
     const caller = await authenticate(request.headers.get("authorization"));
     const path = request.params.path ?? "";
     const cursor = new URL(request.url).searchParams.get("cursor") ?? undefined;
     if (cursor && cursor.length > 4096) throw new ApiError(400, "invalid-cursor", "Invalid pagination cursor.");
     let result: unknown;
-    if (path.startsWith("admin/sync")) {
+    if (path === "reporting/settings" && request.method === "GET") {
+      result = await reportingService(authorization).settings(caller);
+    } else if (path === "admin/reporting/security" && request.method === "POST") {
+      onboarding.requireAdmin(caller);
+      result = await reportingService(authorization).reconcile(caller, await body(request, reportingSecuritySchema));
+    } else if (path.startsWith("admin/sync")) {
       onboarding.requireAdmin(caller);
       const executor = syncService(onboarding);
       if (path === "admin/sync/settings" && request.method === "GET") result = executor.configuration(caller);
@@ -120,7 +130,7 @@ export async function handler(request: HttpRequest, context: InvocationContext):
       context.error(`API failure ${correlationId}; category=${category}; code=${storageCode}. Check identity, storage and configuration.`);
     }
     return {
-      status, headers, jsonBody: {
+      status, headers: { ...headers, ...(error instanceof ReportingInteractionRequired ? { "WWW-Authenticate": error.challenge } : {}) }, jsonBody: {
         code, correlationId,
         message: known ? error.message : "The service could not complete this operation. Keep your draft and retry; contact the administrator with the correlation ID.",
       },

@@ -11,6 +11,10 @@ import { AdminPolicies } from "./AdminPolicies";
 import { AdminSync } from "./AdminSync";
 import { PersonalBalance } from "./PersonalBalance";
 import { ThemeToggle } from "./ThemeToggle";
+import { Settings } from "./Settings";
+import { SnapshotReports } from "./SnapshotReports";
+import { usePreferences, type ReportingSource } from "./preferences";
+import { OperationLock, useOperationLock } from "./OperationLock";
 import { AddPolicyMember } from "./PolicyMembers";
 import { requestStatusLabel as statusLabel, runFulfilment } from "./fulfilment";
 
@@ -65,6 +69,12 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
   const [capabilityError, setCapabilityError] = useState("");
   const [context, setContext] = useState<Context | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const preferences = usePreferences();
+  const [source, setSource] = useState(preferences.value.source);
+  const [locks, setLocks] = useState<string[]>([]);
+  const updateLock = useCallback((id: string, active: boolean) => setLocks((previous) =>
+    previous.includes(id) === active ? previous : active ? [...previous, id] : previous.filter((item) => item !== id)), []);
+  useEffect(() => { if (!locks.length) setSource(preferences.value.source); }, [preferences.value.source, locks]);
   const api = useMemo(() => new RequestApi(config.apiBaseUrl ?? "", () => auth.apiToken(account)), [auth, config.apiBaseUrl, account]);
   const onPublished = useCallback(() => setRefresh((value) => value + 1), []);
   useEffect(() => {
@@ -142,16 +152,18 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
   </section></main>;
 
   const workspaceRequired = view === "request" || (view === "owner" && owner.page !== "setup");
-  return <main className="shell">
+  return <OperationLock.Provider value={updateLock}><main className="shell">
     <header className="masthead"><div><span className="eyebrow">COPILOT BUDGET PORTAL</span>
       <h1>{viewNames[view]}</h1>
       <p className="muted">{view === "admin" ? "Review setup requests and inspect spending-policy ownership." :
         view === "owner" ? "Browse your business units or review employee credit requests." : "Ask your policy owner for an Enhanced allowance."}</p></div>
       <div className="operator"><p>{account.username}</p><div className="actions">
-        <ThemeToggle />
-        <button className="secondary" onClick={() => void authenticate()}>Switch account / renew sign-in</button>
-        <button className="secondary" onClick={() => void authenticate(true)}>Sign out</button>
+        <Settings preferences={preferences} auth={auth} account={account} config={config} locked={locks.length > 0}
+          onAuthenticate={(signOut) => void authenticate(signOut)} />
       </div></div></header>
+    <p className="source-status"><span className="badge">{source === "realtime" ? "Real time" : "Sync / SharePoint"}</span>
+      <span className="small muted">{source === "realtime" ? "Reporting calls the live APIs." : "Reporting uses stored snapshots. Actions remain live."}</span></p>
+    {preferences.error && <p className="error" role="alert">{preferences.error}</p>}
     <PortalNavigation view={view} isAdmin={capabilities?.isAdmin === true} onSelect={navigate} />
     <div className="actions"><button className="secondary" onClick={onPublished}>Refresh workspace</button></div>
     {capabilityError && <p className="error" role="alert">Could not verify administrator access. {capabilityError}</p>}
@@ -170,22 +182,29 @@ export function HostedPortal({ config, auth, initialView }: { config: DemoConfig
         {adminSection === "requests" ? <BusinessUnitOnboarding api={api} auth={auth} account={account}
           mode="admin" capabilities={capabilities} onPublished={onPublished} /> :
           adminSection === "sync" ? <AdminSync api={api} auth={auth} account={account} selectedPolicyId={syncPolicyId} /> :
-          <AdminPolicies key={refresh} api={api} auth={auth} account={account}
-            onSync={(policyId) => { setSyncPolicyId(policyId); setAdminSection("sync"); }} />}
+          source === "sync" ? <SnapshotReports key={refresh} api={api} auth={auth} account={account} inventoryOnly
+            onSync={(policyId) => { setSyncPolicyId(policyId); setAdminSection("sync"); }} /> :
+            <AdminPolicies key={refresh} api={api} auth={auth} account={account}
+              onSync={(policyId) => { setSyncPolicyId(policyId); setAdminSection("sync"); }} />}
       </>}
     </>}
     {workspaceRequired && error && <p className="error" role="alert">{error}</p>}
-    {view === "request" && <PersonalBalance key={`${account.homeAccountId}:${account.localAccountId}:${refresh}`}
-      auth={auth} account={account} serviceId={config.serviceId} />}
+    {view === "request" && (source === "realtime" ? <PersonalBalance key={`${account.homeAccountId}:${account.localAccountId}:${refresh}`}
+      auth={auth} account={account} serviceId={config.serviceId} /> :
+      capabilities?.isAdmin ? <SnapshotReports key={`${account.homeAccountId}:${account.localAccountId}:${refresh}`}
+        api={api} auth={auth} account={account} userId={account.localAccountId} /> :
+        <section className="card"><h2>Your synced usage and balance</h2><p className="notice">
+          {capabilities ? "Personal synced balances are available to administrators only in v1. Credit requests remain available below." :
+            "Checking administrator access for personal synced balances..."}</p></section>)}
     {workspaceRequired && !context && !error && <p role="status">Loading your authorized workspace...</p>}
     {view === "request" && context && <>
       <CreditApprovalNotice />
       <SubmissionForm api={api} context={context} />
     </>}
     {view === "owner" && <OwnerWorkspace location={owner} onNavigate={navigateOwner} context={context}
-      api={api} auth={auth} account={account} capabilities={capabilities} onPublished={onPublished} />}
+      api={api} auth={auth} account={account} capabilities={capabilities} onPublished={onPublished} source={source} />}
     <footer>Evaluation only. Requests are stored privately. Graph preview APIs are not supported for production applications.</footer>
-  </main>;
+  </main></OperationLock.Provider>;
 }
 
 function CreditApprovalNotice() {
@@ -219,9 +238,10 @@ export function BusinessUnitList({ budgets, onNavigate }: {
   </section>;
 }
 
-export function OwnerWorkspace({ location, onNavigate, context, api, auth, account, capabilities, onPublished }: {
+export function OwnerWorkspace({ location, onNavigate, context, api, auth, account, capabilities, onPublished, source = "realtime" }: {
   location: OwnerLocation; onNavigate: (location: OwnerLocation) => void; context: Context | null;
   api: RequestApi; auth: DemoAuth; account: AccountInfo; capabilities: OnboardingCapabilities | null; onPublished: () => void;
+  source?: ReportingSource;
 }) {
   const budget = context?.ownedBudgets.find((item) => item.id === location.budgetId);
   return <div className="owner-workspace">
@@ -240,7 +260,7 @@ export function OwnerWorkspace({ location, onNavigate, context, api, auth, accou
     </> : location.budgetId ? <>
       <div className="actions"><button className="secondary" onClick={() => onNavigate({ page: "budgets" })}>Back to business units</button></div>
       {!budget ? <p className="error" role="alert">This business unit is unavailable or you are no longer an owner. Return to your business unit list.</p> :
-        <OwnerGraph key={budget.id} budget={budget} serviceId={context.serviceId} auth={auth} account={account} api={api} />}
+        <OwnerGraph key={budget.id} budget={budget} serviceId={context.serviceId} auth={auth} account={account} api={api} source={source} />}
     </> : <BusinessUnitList budgets={context.ownedBudgets} onNavigate={onNavigate} />)}
   </div>;
 }
@@ -406,8 +426,8 @@ export function RequestCard({ record, api, inbox, onDecision, auth, account, ser
   </article>;
 }
 
-function OwnerGraph({ budget, serviceId, auth, account, api }: {
-  budget: BudgetConfig; serviceId: string; auth: DemoAuth; account: AccountInfo; api: RequestApi;
+function OwnerGraph({ budget, serviceId, auth, account, api, source }: {
+  budget: BudgetConfig; serviceId: string; auth: DemoAuth; account: AccountInfo; api: RequestApi; source: ReportingSource;
 }) {
   const [snapshot, setSnapshot] = useState<BudgetSnapshot | null>(null);
   const [error, setError] = useState("");
@@ -416,21 +436,24 @@ function OwnerGraph({ budget, serviceId, auth, account, api }: {
   const [graphReady, setGraphReady] = useState(false);
   const [working, setWorking] = useState(false);
   const [notice, setNotice] = useState("");
+  useOperationLock(working);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
-    void load();
+    setSnapshot(null); setGraphReady(false); setNeedsConsent(false); setNotice(""); setBusy(false); setError("");
+    if (source === "realtime") void load();
     return () => controller.current?.abort();
-  }, [budget, serviceId, auth, account]);
+  }, [budget, serviceId, auth, account, source]);
   async function load(interactive = false) {
+    if (source !== "realtime") return;
     controller.current?.abort();
     const current = new AbortController(); controller.current = current;
     setBusy(true); setError(""); setSnapshot(null);
     try {
       if (interactive) await auth.consentGraph(account);
       await auth.token(account);
+      if (current.signal.aborted) return;
       setNeedsConsent(false);
       setGraphReady(true);
-      if (current.signal.aborted) return;
       await loadBudgetDetails(budget, serviceId, new GraphClient(() => auth.token(account).catch((error: unknown) => {
         if (!current.signal.aborted) setNeedsConsent(isGraphInteractionRequired(error));
         throw error;
@@ -446,16 +469,34 @@ function OwnerGraph({ budget, serviceId, auth, account, api }: {
   }
   return <><section className="card"><span className="eyebrow">BUSINESS UNIT / POLICIES</span><h2>{budget.displayName}</h2>
     <p className="muted">{budget.businessArea} / Cost centre: {budget.costCenter}</p>
-    <p className="small muted">Standard and Enhanced policy settings, members and current consumption. Readings come directly from Graph and may lag behind membership changes.</p>
+    <p className="small muted">{source === "realtime" ? "Standard and Enhanced policy settings, members and current consumption. Readings come directly from Graph and may lag behind membership changes." :
+      "Standard and Enhanced snapshots are displayed separately by policy and collection time. Actions always use live APIs."}</p>
     <div className="actions">
-      <button disabled={busy || working} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh policies"}</button>
-      {needsConsent && <button disabled={busy || working} onClick={() => void load(true)}>Grant Graph access</button>}
+      {source === "realtime" ? <><button disabled={busy || working} onClick={() => void load()}>{busy ? "Loading Graph..." : "Refresh policies"}</button>
+        {needsConsent && <button disabled={busy || working} onClick={() => void load(true)}>Grant Graph access</button>}</> :
+        !graphReady && <button disabled={busy || working} onClick={() => {
+          setWorking(true); setError("");
+          void auth.consentGraph(account).then(() => setGraphReady(true)).catch((error: unknown) => setError(message(error)))
+            .finally(() => setWorking(false));
+        }}>Enable live policy actions</button>}
     </div>
     {working && <p className="small muted" role="status">A policy action is in progress. Keep this page open.</p>}
     {notice && <p className="notice small" role="status">{notice}</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </section>
-    {snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId}
+    {source === "sync" && <SnapshotReports api={api} auth={auth} account={account}
+      policyIds={[budget.tiers.standard.policyId, budget.tiers.enhanced.policyId]} />}
+    {source === "sync" && graphReady && <section className="card"><h3>Live policy actions</h3>
+      <p className="notice">These actions call the live APIs. Stored snapshots will not change until the next successful sync.</p>
+      {(["standard", "enhanced"] as const).map((tier) => <section key={tier}><h4>{tier === "standard" ? "Standard" : "Enhanced"}</h4>
+        <BudgetAllocation budget={budget} tier={tier} api={api} auth={auth} account={account} disabled={busy || working}
+          onBusyChange={setWorking} onApplied={() => setNotice("Limits verified in live Graph. The SharePoint snapshot is unchanged; run sync to update it.")} />
+        <AddPolicyMember budget={budget} tier={tier} serviceId={serviceId} api={api} auth={auth} account={account}
+          disabled={busy || working} onBusyChange={setWorking}
+          onAdded={(user) => setNotice(`${user.displayName}'s live membership and request routing were verified. The SharePoint snapshot is unchanged; run sync to update it.`)} />
+      </section>)}
+    </section>}
+    {source === "realtime" && snapshot?.budgetId === budget.id && <BudgetDetails budget={budget} snapshot={snapshot} serviceId={serviceId}
       policyActions={(tier) => graphReady && <BudgetAllocation budget={budget} tier={tier} api={api} auth={auth} account={account}
         disabled={busy || working} onBusyChange={setWorking} onApplied={() => {
           setNotice(`${tier === "standard" ? "Standard" : "Enhanced"} policy limits were verified in Graph.`);

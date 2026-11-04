@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InteractionRequiredAuthError, type AccountInfo } from "@azure/msal-browser";
-import { balanceScopes, DemoAuth, isGraphInteractionRequired, requesterScopes, scopes, syncScopes } from "./auth";
+import { balanceScopes, DemoAuth, isGraphInteractionRequired, reportingScopes, requesterScopes, scopes, syncScopes } from "./auth";
 import { parseConfig } from "./config";
 
 const msal = vi.hoisted(() => ({
@@ -62,6 +62,35 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("operator-selected delegated scopes", () => {
+  it("acquires SharePoint reporting without Cost Management or directory scopes and redacts diagnostics", async () => {
+    const auth = new DemoAuth(config);
+    expect(auth.diagnostics(account)).toEqual([]);
+    expect(msal.acquireTokenSilent).not.toHaveBeenCalled();
+    msal.acquireTokenSilent.mockResolvedValue({ account, accessToken: "secret-access-token", idToken: "secret-id-token",
+      scopes: reportingScopes, expiresOn: new Date("2099-01-01T00:00:00Z"), fromCache: true });
+    expect(await auth.reportingToken(account)).toBe("secret-access-token");
+    expect(msal.acquireTokenSilent).toHaveBeenCalledWith({ account, scopes: reportingScopes });
+    expect(reportingScopes).toEqual(["https://graph.microsoft.com/Sites.Selected"]);
+    expect(auth.diagnostics(account)).toEqual([{ scopes: reportingScopes, acquiredAt: expect.any(String),
+      expiresAt: "2099-01-01T00:00:00.000Z", fromCache: true }]);
+    expect(JSON.stringify(auth.diagnostics(account))).not.toContain("secret-");
+    expect(auth.diagnostics({ ...account, localAccountId: "different" })).toEqual([]);
+    await auth.signOut();
+    expect(auth.diagnostics(account)).toEqual([]);
+  });
+  it("retains a reporting claims challenge for subsequent reads without broadening scopes", async () => {
+    const auth = new DemoAuth(config);
+    const claims = JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" } } });
+    msal.acquireTokenSilent.mockRejectedValueOnce(new InteractionRequiredAuthError("interaction_required", "MFA"));
+    msal.acquireTokenPopup.mockResolvedValueOnce({ account, scopes: reportingScopes });
+    await auth.refreshReporting(account, claims);
+    expect(msal.acquireTokenPopup).toHaveBeenCalledWith(expect.objectContaining({ scopes: reportingScopes, account,
+      claims: JSON.stringify({ access_token: { acrs: { essential: true, value: "c1" }, xms_cc: { values: ["cp1"] } } }) }));
+    msal.acquireTokenSilent.mockResolvedValueOnce({ account, accessToken: "token" });
+    await auth.reportingToken(account);
+    expect(msal.acquireTokenSilent).toHaveBeenLastCalledWith(expect.objectContaining({ scopes: reportingScopes,
+      claims: expect.stringContaining("c1") }));
+  });
   it("uses a dedicated sync scope set and bypasses cached access on explicit PIM refresh", async () => {
     msal.acquireTokenSilent.mockResolvedValue({ accessToken: "fresh-token" });
     const auth = new DemoAuth(config);

@@ -7,8 +7,12 @@
     <script>
       (() => {
         const param = new URLSearchParams(window.location.search).get("scoutTheme");
-        const theme =
-          param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        let saved;
+        try { saved = window.localStorage.getItem("copilotAppearance"); }
+        catch { /* The settings panel reports unavailable browser storage. */ }
+        const preference = param === "light" || param === "dark" ? param : saved;
+        const theme = preference === "light" || preference === "dark" ? preference :
+          (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>

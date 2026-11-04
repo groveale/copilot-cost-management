@@ -5,6 +5,7 @@ import type { Metadata } from "./contracts.js";
 import { ApiError } from "./model.js";
 import { isStorageNotFound, readMetadata } from "./storage.js";
 import { onboardingRecordSchema, type OnboardingRecord, type OnboardingStore } from "./onboarding.js";
+import { guardMetadataWrite } from "./reporting-runtime.js";
 
 function hasStatus(error: unknown, statusCode: number) {
   return typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === statusCode;
@@ -24,7 +25,8 @@ export class AzureOnboardingStore implements OnboardingStore {
   private readonly requests: TableClient;
   private readonly index: TableClient;
   private readonly blob;
-  constructor(private readonly tenantId: string, tableUrl: string, blobUrl: string, token: TokenCredential) {
+  constructor(private readonly tenantId: string, tableUrl: string, blobUrl: string, token: TokenCredential,
+    private readonly authorization: string | null = null) {
     this.requests = new TableClient(tableUrl, "OnboardingRequests", token);
     this.index = new TableClient(tableUrl, "RequesterBudgetIndex", token);
     this.blob = new BlobServiceClient(blobUrl, token).getContainerClient("metadata").getBlockBlobClient("budgets.json");
@@ -62,8 +64,11 @@ export class AzureOnboardingStore implements OnboardingStore {
   async saveMetadata(metadata: Metadata, etag: string | null) {
     const data = Buffer.from(JSON.stringify(metadata));
     if (data.length > 1_048_576) throw new ApiError(413, "too-large", "Metadata exceeds the 1 MiB demo limit.");
+    return guardMetadataWrite(metadata, etag, (leaseId) => this.writeMetadata(data, etag, leaseId), this.authorization);
+  }
+  private async writeMetadata(data: Buffer, etag: string | null, leaseId?: string) {
     try {
-      await this.blob.uploadData(data, { conditions: etag ? { ifMatch: etag } : { ifNoneMatch: "*" },
+      await this.blob.uploadData(data, { conditions: { ...(etag ? { ifMatch: etag } : { ifNoneMatch: "*" }), ...(leaseId ? { leaseId } : {}) },
         blobHTTPHeaders: { blobContentType: "application/json" } });
     } catch (error) {
       if (hasStatus(error, 409) || hasStatus(error, 412)) throw new ApiError(409, "metadata-conflict", "Metadata changed. Refresh and retry; existing data was not reset.");

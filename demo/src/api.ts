@@ -2,10 +2,12 @@ import type { Context, Decision, FulfilmentUpdate, Page, RequestRecord, Submissi
 import type { Budget, Metadata } from "../../api/src/contracts";
 import type { AllocationInput, BuDecision, BuSubmission, MemberUpdate, OnboardingRecord, WorkUpdate } from "../../api/src/onboarding";
 import type { SyncJob, SyncSettings, SyncUpdate } from "../../api/src/sync-contracts";
+import type { ReportingSettings } from "../../api/src/reporting-contracts";
+import { claimsChallenge } from "./graph";
 export type { Context, Decision, Page, RequestRecord, Submission };
 export interface OnboardingCapabilities { isAdmin: boolean; bootstrapEnabled: boolean; objectId: string; displayName?: string; contactHint?: string }
 export class ApiRequestError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) { super(message); }
+  constructor(message: string, readonly status: number, readonly code: string, readonly claims?: string) { super(message); }
 }
 
 export class RequestApi {
@@ -24,7 +26,8 @@ export class RequestApi {
     if (!response.ok) {
       const error = await response.json();
       throw new ApiRequestError(`${error.message ?? `API request failed (HTTP ${response.status}).`}${error.correlationId ? ` Reference: ${error.correlationId}` : ""}`,
-        response.status, typeof error.code === "string" ? error.code : "api-failed");
+        response.status, typeof error.code === "string" ? error.code : "api-failed",
+        claimsChallenge(response.headers.get("www-authenticate")));
     }
     return response.json();
   }
@@ -63,6 +66,11 @@ export class RequestApi {
     return this.call(`budgets/${encodeURIComponent(budgetId)}/allocation`, signal, input);
   }
   syncSettings(signal: AbortSignal): Promise<SyncSettings> { return this.call("admin/sync/settings", signal); }
+  reportingSettings(signal: AbortSignal): Promise<ReportingSettings> { return this.call("reporting/settings", signal); }
+  reportingReconcile(signal: AbortSignal, input: { policyId?: string; jobId?: string; leaseId?: string } = {}):
+    Promise<{ ready: true; checkedAt: string; policies: number; rows: number }> {
+    return this.call("admin/reporting/security", signal, input);
+  }
   syncCurrent(signal: AbortSignal): Promise<SyncJob | null> { return this.call("admin/sync/current", signal); }
   syncMaintain(jobId: string, leaseId: string, signal: AbortSignal): Promise<{ removed: number }> {
     return this.call("admin/sync/maintenance", signal, { jobId, leaseId });

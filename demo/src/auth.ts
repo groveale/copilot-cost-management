@@ -1,4 +1,4 @@
-import { InteractionRequiredAuthError, PublicClientApplication, type AccountInfo } from "@azure/msal-browser";
+import { InteractionRequiredAuthError, PublicClientApplication, type AccountInfo, type AuthenticationResult } from "@azure/msal-browser";
 import { object, type DemoConfig } from "./config";
 
 export const scopes = [
@@ -13,6 +13,8 @@ export const scopes = [
 ].map((scope) => `https://graph.microsoft.com/${scope}`);
 
 export const requesterScopes = ["openid", "profile"];
+export const reportingScopes = ["https://graph.microsoft.com/Sites.Selected"];
+export interface TokenDiagnostic { scopes: string[]; acquiredAt: string; expiresAt: string | null; fromCache: boolean }
 export const balanceScopes = [
   "https://graph.microsoft.com/CopilotCostManagement-UserData.Read.All",
   "https://graph.microsoft.com/CopilotCostManagement-Policy.Read.All",
@@ -32,6 +34,10 @@ function syncClaims(claims?: string) {
 export class DemoAuth {
   private readonly app: PublicClientApplication;
   private syncChallenge?: { accountId: string; claims: string };
+  private apiChallenge?: { accountId: string; claims: string };
+  private reportingChallenge?: { accountId: string; claims: string };
+  private acquisitions = new Map<string, TokenDiagnostic>();
+  private diagnosticAccount?: string;
 
   constructor(private readonly config: DemoConfig) {
     this.app = new PublicClientApplication({
@@ -58,6 +64,7 @@ export class DemoAuth {
   }
 
   async signIn(mode: "owner" | "requester" = "owner"): Promise<AccountInfo> {
+    this.clearDiagnostics();
     const result = await this.app.loginPopup({
       scopes: mode === "requester" ? [...requesterScopes, ...(this.config.apiScope ? [this.config.apiScope] : [])] : scopes,
       prompt: "select_account",
@@ -66,6 +73,7 @@ export class DemoAuth {
       throw new Error("Sign-in returned an account from a different tenant.");
     }
     this.app.setActiveAccount(result.account);
+    this.record(result, result.scopes ?? requesterScopes, result.account);
     return result.account;
   }
 
@@ -75,7 +83,60 @@ export class DemoAuth {
 
   async apiToken(account = this.account()): Promise<string> {
     if (!this.config.apiScope) throw new Error("The API permission is not configured.");
-    return this.acquire([this.config.apiScope], account);
+    const claims = account && this.apiChallenge?.accountId === account.homeAccountId ? this.apiChallenge.claims : undefined;
+    return this.acquire([this.config.apiScope], account, claims ? { claims, forceRefresh: false } : {});
+  }
+
+  async refreshApi(account: AccountInfo, claims?: string): Promise<void> {
+    if (!this.config.apiScope) throw new Error("The API permission is not configured.");
+    const requested = claims ?? (this.apiChallenge?.accountId === account.homeAccountId ? this.apiChallenge.claims : undefined);
+    const request = syncClaims(requested);
+    await this.refreshResource([this.config.apiScope], account, request);
+    this.apiChallenge = { accountId: account.homeAccountId, claims: request };
+  }
+  private async refreshResource(requestScopes: string[], account: AccountInfo, claims: string): Promise<void> {
+    try { await this.acquire(requestScopes, account, { forceRefresh: true, claims }); }
+    catch (error) {
+      if (!isGraphInteractionRequired(error)) throw error;
+      const result = await this.app.acquireTokenPopup({ account, scopes: requestScopes, claims });
+      this.checkResult(result, account);
+      this.record(result, requestScopes, account);
+    }
+  }
+
+  async reportingToken(account: AccountInfo): Promise<string> {
+    const claims = this.reportingChallenge?.accountId === account.homeAccountId ? this.reportingChallenge.claims : undefined;
+    return this.acquire(reportingScopes, account, claims ? { claims } : {});
+  }
+  async refreshReporting(account: AccountInfo, claims?: string): Promise<void> {
+    const requested = syncClaims(claims ?? (this.reportingChallenge?.accountId === account.homeAccountId ? this.reportingChallenge.claims : undefined));
+    await this.refreshResource(reportingScopes, account, requested);
+    this.reportingChallenge = { accountId: account.homeAccountId, claims: requested };
+  }
+  async consentReporting(account: AccountInfo): Promise<void> { return this.consent(reportingScopes, account); }
+
+  diagnostics(account: AccountInfo): TokenDiagnostic[] {
+    if (this.diagnosticAccount !== `${account.homeAccountId}:${account.localAccountId}`) return [];
+    return [...this.acquisitions.values()].map((item) => ({ ...item, scopes: [...item.scopes] }));
+  }
+  private clearDiagnostics() {
+    this.acquisitions.clear();
+    this.diagnosticAccount = undefined;
+    this.apiChallenge = undefined;
+    this.reportingChallenge = undefined;
+    this.syncChallenge = undefined;
+  }
+  private record(result: AuthenticationResult, requestScopes: string[], account: AccountInfo) {
+    const id = `${account.homeAccountId}:${account.localAccountId}`;
+    if (this.diagnosticAccount !== id) this.acquisitions.clear();
+    this.diagnosticAccount = id;
+    const acquiredScopes = [...(result.scopes ?? requestScopes)].sort();
+    this.acquisitions.set(acquiredScopes.join(" "), { scopes: acquiredScopes, acquiredAt: new Date().toISOString(),
+      expiresAt: result.expiresOn?.toISOString() ?? null, fromCache: result.fromCache === true });
+  }
+  private checkResult(result: AuthenticationResult, account: AccountInfo) {
+    if (result.account.homeAccountId !== account.homeAccountId || result.account.localAccountId !== account.localAccountId ||
+        result.account.tenantId.toLowerCase() !== this.config.tenantId) throw new Error("The account changed during authentication. Sign in again.");
   }
 
   async balanceToken(account = this.account()): Promise<string> {
@@ -99,6 +160,7 @@ export class DemoAuth {
     if (result.account.homeAccountId !== account.homeAccountId || result.account.localAccountId !== account.localAccountId ||
         result.account.tenantId.toLowerCase() !== this.config.tenantId) throw new Error("The account changed during sync authentication.");
     if (requested) this.syncChallenge = { accountId, claims: requested };
+    this.record(result, syncScopes, account);
   }
 
   async consentGraph(account: AccountInfo): Promise<void> {
@@ -120,6 +182,8 @@ export class DemoAuth {
     if (result.account.homeAccountId !== account.homeAccountId || result.account.localAccountId !== account.localAccountId) {
       throw new Error("The account changed during Graph consent. Sign in again.");
     }
+    this.checkResult(result, account);
+    this.record(result, requestScopes, account);
   }
 
   private async acquire(requestScopes: string[], account: AccountInfo | null,
@@ -131,11 +195,13 @@ export class DemoAuth {
       throw new Error("The signed-in account changed. Sign in again before loading protected data.");
     }
     const result = await this.app.acquireTokenSilent({ account, scopes: requestScopes, ...options });
+    if (result.account) this.checkResult(result, account);
+    this.record(result, requestScopes, account);
     return result.accessToken;
   }
 
   async signOut(): Promise<void> {
-    this.syncChallenge = undefined;
+    this.clearDiagnostics();
     const account = this.account();
     if (account) await this.app.logoutPopup({ account, mainWindowRedirectUri: window.location.href });
   }

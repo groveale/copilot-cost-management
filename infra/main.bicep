@@ -24,6 +24,9 @@ param syncMaxConcurrency int = 8
 @minValue(1)
 @maxValue(3650)
 param syncJobRetentionDays int = 30
+@secure()
+@description('Explicit reporting opt-in: enabled, siteUrl, adminGroupId and versioned certificateId. Contains no private key or secret.')
+param reportingSecurity object = {}
 
 var suffix = uniqueString(resourceGroup().id, prefix)
 var tags = { application: 'copilot-cost-demo', environment: 'demo' }
@@ -114,6 +117,19 @@ module network './network.bicep' = {
     businessStorageName: business.name
   }
 }
+var reportingEnabled = reportingSecurity.?enabled ?? false
+var signingVaultName = '${take(prefix, 8)}-rpt-${take(suffix, 10)}'
+module reporting './reporting.bicep' = if (reportingEnabled) {
+  name: 'reporting-certificate-vault'
+  params: {
+    vaultName: signingVaultName
+    location: location
+    tags: tags
+    tenantId: tenantId
+    endpointSubnetId: network.outputs.endpointSubnetId
+    vnetName: network.outputs.vnetName
+  }
+}
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-logs-${suffix}'
   location: location
@@ -191,6 +207,12 @@ resource api 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'SYNC_DEFAULT_CONCURRENCY', value: string(syncDefaultConcurrency) }
         { name: 'SYNC_MAX_CONCURRENCY', value: string(syncMaxConcurrency) }
         { name: 'SYNC_JOB_RETENTION_DAYS', value: string(syncJobRetentionDays) }
+        { name: 'REPORTING_SECURITY_ENABLED', value: reportingEnabled ? 'true' : 'false' }
+        { name: 'REPORTING_SITE_URL', value: reportingSecurity.?siteUrl ?? '' }
+        { name: 'REPORTING_ADMIN_GROUP_ID', value: string(reportingSecurity.?adminGroupId ?? '') }
+        { name: 'REPORTING_CERTIFICATE_ID', value: reportingSecurity.?certificateId ?? '' }
+        { name: 'REPORTING_MAX_SCOPES', value: '5000' }
+        { name: 'REPORTING_SCOPE_RESERVE', value: '250' }
       ]
     }
     functionAppConfig: {
@@ -222,6 +244,7 @@ resource ftp 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-04-01'
 }
 
 output functionName string = api.name
+output reportingVaultName string = reportingEnabled ? signingVaultName : ''
 output functionPrincipalId string = api.identity.principalId
 output functionId string = api.id
 output apiUrl string = 'https://${api.properties.defaultHostName}'

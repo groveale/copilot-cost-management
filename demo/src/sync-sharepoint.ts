@@ -164,10 +164,16 @@ export class SharePointSync {
         AccessReason: row.reason, SourceTime: row.sourceTime, ObservedAt: row.observedAt, SchemaVersion: 1,
       }, signal);
     });
+    const before = await this.find(this.settings.policyListId, "PolicyKey", fence.key, signal);
+    if (!before || before.fields.FenceId !== fence.leaseId || before.etag !== fence.item.etag) {
+      throw new Error("SharePoint publication fence changed. The previous snapshot was preserved.");
+    }
     await checkLease();
     const current = await this.find(this.settings.policyListId, "PolicyKey", fence.key, signal);
-    if (!current || current.fields.FenceId !== fence.leaseId || current.etag !== fence.item.etag) {
-      throw new Error("SharePoint publication fence changed. The previous snapshot was preserved.");
+    const protectedFields = ["Title", "PolicyKey", "TenantId", "PolicyId", "SchemaVersion", "FenceId", "DisplayName",
+      "PolicyType", "ActiveSnapshotId", "JobId", "Configuration", "Totals", "Coverage", "Presence", "StartedAt", "ObservedAt", "LastInventoryAt"];
+    if (!current || !protectedFields.every((name) => sameField(name, current.fields[name], before.fields[name]))) {
+      throw new Error("SharePoint publication fence or content changed while verifying permissions. The previous snapshot was preserved.");
     }
     const mappings = metadata?.budgets.flatMap((budget) => (["standard", "enhanced"] as const)
       .filter((tier) => budget.tiers[tier].policyId.toLowerCase() === policy.id)

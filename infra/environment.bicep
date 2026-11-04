@@ -14,6 +14,8 @@ param syncDestination object = {}
 param syncDefaultConcurrency int = 3
 param syncMaxConcurrency int = 8
 param syncJobRetentionDays int = 30
+@secure()
+param reportingSecurity object = {}
 
 resource group 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
@@ -40,6 +42,7 @@ module resources './main.bicep' = {
     syncDefaultConcurrency: syncDefaultConcurrency
     syncMaxConcurrency: syncMaxConcurrency
     syncJobRetentionDays: syncJobRetentionDays
+    reportingSecurity: reportingSecurity
   }
 }
 output resources object = resources.outputs

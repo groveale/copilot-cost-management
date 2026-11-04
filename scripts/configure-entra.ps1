@@ -3,6 +3,7 @@ param(
   [string] $ApiDisplayName = 'Copilot Cost Management Requests API',
   [string] $SiteUrl,
   [switch] $EnableSync,
+  [switch] $EnableReportingSecurity,
   [switch] $Apply
 )
 $ErrorActionPreference = 'Stop'
@@ -12,7 +13,7 @@ function Invoke-AzJson([string[]] $Arguments) {
   if ($output) { return ($output | ConvertFrom-Json -Depth 100) }
 }
 function Update-App([string] $ObjectId, [object] $Patch) {
-  $file = [IO.Path]::GetTempFileName()
+  $file = Join-Path (Get-Location) ".entra-patch-$([guid]::NewGuid()).json"
   try {
     $Patch | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $file -Encoding utf8
     Invoke-AzJson @('rest', '--method', 'PATCH', '--url', "https://graph.microsoft.com/v1.0/applications/$ObjectId", '--body', "@$file") | Out-Null
@@ -30,6 +31,7 @@ if ($SiteUrl) {
 if (!$Apply) {
   Write-Output 'Preview only: create/reuse a single-tenant API registration; expose v2 access_as_user; preauthorize this SPA; preserve existing Graph permissions; ensure enterprise application.'
   if ($EnableSync) { Write-Output 'Also add delegated sync read scopes and Sites.Selected to the SPA. Consent and the explicit site write grant are separate operator steps.' }
+  if ($EnableReportingSecurity) { Write-Output 'Opt in: add SharePoint delegated AllSites.FullControl and Graph User.ReadBasic.All to the confidential API, for certificate-backed OBO only. Requires separate administrator consent and public-certificate registration. No application permissions or credentials are created.' }
   if ($SiteUrl) { Write-Output "Also preserve existing SPA redirects and add $SiteUrl/auth.html and the localhost callback." }
   Write-Output "Existing matching API registrations: $($matches.Count). Rerun with -Apply after review."
   return
@@ -68,6 +70,26 @@ Update-App $api.id @{
 }
 # Entra validates preauthorization against already-persisted permissions.
 Update-App $api.id @{ api = @{ preAuthorizedApplications = @($preauthorized) } }
+if ($EnableReportingSecurity) {
+  $apiPermissions = @($api.requiredResourceAccess | Where-Object { $null -ne $_ })
+  foreach ($resource in @(
+      @{ appId = '00000003-0000-0ff1-ce00-000000000000'; scope = 'AllSites.FullControl' },
+      @{ appId = '00000003-0000-0000-c000-000000000000'; scope = 'User.ReadBasic.All' }
+    )) {
+    $advertisedResource = @(Invoke-AzJson @('ad', 'sp', 'list', '--filter', "appId eq '$($resource.appId)'"))
+    if ($advertisedResource.Count -ne 1) { throw 'The downstream delegated resource could not be uniquely resolved.' }
+    $advertisedScope = @($advertisedResource[0].oauth2PermissionScopes | Where-Object { $_.value -eq $resource.scope -and $_.isEnabled })
+    if ($advertisedScope.Count -ne 1) { throw "Required delegated permission $($resource.scope) is not advertised. Do not substitute application permissions." }
+    $existing = @($apiPermissions | Where-Object resourceAppId -EQ $resource.appId)
+    $resourceAccess = @($existing.resourceAccess | Where-Object { $null -ne $_ })
+    if (-not @($resourceAccess | Where-Object { $_.id -eq $advertisedScope[0].id -and $_.type -eq 'Scope' }).Count) {
+      $resourceAccess += @{ id = $advertisedScope[0].id; type = 'Scope' }
+    }
+    $apiPermissions = @($apiPermissions | Where-Object resourceAppId -NE $resource.appId) +
+      @(@{ resourceAppId = $resource.appId; resourceAccess = @($resourceAccess) })
+  }
+  Update-App $api.id @{ requiredResourceAccess = @($apiPermissions) }
+}
 $permissions = @($spa.requiredResourceAccess | Where-Object { $null -ne $_ -and $_.resourceAppId -ne $api.appId })
 $existingApiPermission = @($spa.requiredResourceAccess | Where-Object { $_.resourceAppId -eq $api.appId })
 $access = @($existingApiPermission.resourceAccess | Where-Object { $null -ne $_ -and $_.id -ne $scopeId })
