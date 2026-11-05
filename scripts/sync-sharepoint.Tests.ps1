@@ -39,6 +39,7 @@ Describe 'SharePoint sync setup schema' {
         foreach ($definition in $definitions) {
             @($definition.columns | Where-Object enforceUniqueValues -EQ $true).Count | Should -Be 1
             @($definition.columns | Where-Object { $_.name -eq 'TenantId' -and $_.indexed }).Count | Should -Be 1
+            $definition.columns.name | Should -Not -Contain 'DisplayName'
         }
         ($definitions[1].columns.name) | Should -Contain 'RemainingKind'
         ($definitions[1].columns.name) | Should -Contain 'SnapshotId'
@@ -118,6 +119,18 @@ Describe 'SharePoint sync setup preview and idempotence' {
         $script:writes | Should -Be 3
         Initialize-SyncSharePoint @connection -Apply | Out-Null
         $script:writes | Should -Be 3
+    }
+    It 'preserves existing unused DisplayName columns when revalidating older lists' {
+        Initialize-SyncSharePoint @connection -PrototypeReporting -Apply | Out-Null
+        foreach ($list in $script:testLists | Where-Object displayName -NE 'CopilotSyncJobs') {
+            $list.columns += New-SyncColumn DisplayName
+        }
+        Initialize-SyncSharePoint @connection -PrototypeReporting -Apply | Out-Null
+        $script:writes | Should -Be 3
+        foreach ($list in $script:testLists | Where-Object displayName -NE 'CopilotSyncJobs') {
+            $list.columns.name | Should -Contain 'DisplayName'
+        }
+        Should -Invoke Invoke-SyncGraph -Times 0 -ParameterFilter { $Method -in @('PATCH', 'DELETE') }
     }
     It 'provisions explicit prototype lists without PnP, ACL changes or extra scopes and is idempotent' {
         Mock Protect-SyncLists { throw 'Prototype must not run lockdown.' }

@@ -461,6 +461,13 @@ authorization. No tenant protections are relaxed to keep a sync running.
   pauses collection instead of ignoring the server's requested delay.
 - Writes use deterministic keys, ETags and exact readback after uncertain
   responses; they are not blindly retried.
+- Policy and user names are stored and verified in the built-in `Title` column.
+  Graph can omit a custom column named `DisplayName` even after acknowledging
+  the write. Setup no longer creates that redundant column; existing columns
+  and rows are left intact, with legacy name reads supported. No list recreation
+  or setup rerun is needed for this correction. A write-readback mismatch now
+  identifies the field names without exposing stored values; it does not by
+  itself prove another writer changed the item.
 - Pause/resume retains completed policies. An interrupted unfinished policy
   restarts under a new generation, including on administrator takeover; the app
   does not promise per-user continuation after the browser is closed.

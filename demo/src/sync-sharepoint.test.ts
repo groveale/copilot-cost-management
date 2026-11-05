@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SyncJob, SyncSettings } from "../../api/src/sync-contracts";
 import { GraphClient, GraphError } from "./graph";
 import { SharePointSync } from "./sync-sharepoint";
+import { SharePointReporting } from "./reporting";
 import { observationsFor, aggregateObservations, type PolicySnapshot } from "./sync-collector";
 
 const id = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -17,6 +18,7 @@ class Lists extends GraphClient {
   counter = 0;
   failObservation = false;
   loseResponse = false;
+  omitDisplayName = false;
   constructor() { super(async () => "unused"); }
   private listId(path: string) { return path.match(/\/lists\/([a-f0-9-]+)/)![1]; }
   private data(path: string) { const key = this.listId(path); if (!this.rows.has(key)) this.rows.set(key, []); return this.rows.get(key)!; }
@@ -24,7 +26,9 @@ class Lists extends GraphClient {
     const url = new URL(path, "https://graph.microsoft.com");
     const filter = url.searchParams.get("$filter")!;
     const [, name, raw] = /fields\/(\w+) eq '(.*)'/.exec(filter)!;
-    return structuredClone(this.data(path).filter((row) => row.fields[name] === raw.replace(/''/g, "'")));
+    const rows = structuredClone(this.data(path).filter((row) => row.fields[name] === raw.replace(/''/g, "'")));
+    if (this.omitDisplayName) for (const row of rows) delete row.fields.DisplayName;
+    return rows;
   }
   override async post(path: string, body: unknown) {
     const fields = (body as { fields: Record<string, unknown> }).fields;
@@ -62,6 +66,36 @@ function setup() {
   return { graph, reporting, snapshot, signal: new AbortController().signal };
 }
 describe("SharePoint generation publication", () => {
+  it.each([false, true])("round-trips names through Title when Graph omits DisplayName (lost response: %s)", async (loseResponse) => {
+    const { graph, reporting, snapshot, signal } = setup();
+    graph.omitDisplayName = true; graph.loseResponse = loseResponse;
+    await reporting.mirror(job, signal);
+    await reporting.publish(await reporting.fence(policy, job, signal), snapshot, policy, job, null, signal, async () => {});
+    const reader = new SharePointReporting(graph, { ...settings, accessMode: "prototype",
+      isAdmin: true, policyIds: [], securityReady: false }, job.tenantId);
+    const saved = await reader.read(policy.id, signal);
+    expect(saved.policy.displayName).toBe(policy.displayName);
+    expect(saved.observations[0].displayName).toBe("Private user");
+    expect(graph.rows.get(settings.policyListId)![0].fields).not.toHaveProperty("DisplayName");
+    expect(graph.rows.get(settings.balanceListId)![0].fields).not.toHaveProperty("DisplayName");
+    expect(graph.rows.get(settings.balanceListId)).toHaveLength(1);
+  });
+  it("still rejects a changed Title and identifies the mismatched field without exposing its value", async () => {
+    const { graph, reporting, snapshot, signal } = setup();
+    await reporting.publish(await reporting.fence(policy, job, signal), snapshot, policy, job, null, signal, async () => {});
+    const previous = graph.rows.get(settings.policyListId)![0].fields.ActiveSnapshotId;
+    const post = graph.post.bind(graph);
+    vi.spyOn(graph, "post").mockImplementation(async (path, body) => {
+      const saved = await post(path, body);
+      if (path.includes(settings.balanceListId)) saved.data.fields.Title = "Unexpected private name";
+      return saved;
+    });
+    const next = { ...job, id: id(20) };
+    const result = reporting.publish(await reporting.fence(policy, next, signal), snapshot, policy, next, null, signal, async () => {});
+    await expect(result).rejects.toThrow("Fields did not match: Title.");
+    await expect(result).rejects.not.toThrow("Unexpected private name");
+    expect(graph.rows.get(settings.policyListId)![0].fields.ActiveSnapshotId).toBe(previous);
+  });
   it("publishes a complete generation, recovers a lost job acknowledgement, and removes only superseded rows", async () => {
     const { graph, reporting, snapshot, signal } = setup();
     const fence = await reporting.fence(policy, job, signal);

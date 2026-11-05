@@ -43,6 +43,19 @@ function fixture() {
 }
 const signal = () => new AbortController().signal;
 describe("delegated active-generation reporting", () => {
+  it("uses verified Title names rather than a missing or stale custom DisplayName field", async () => {
+    const { reader, master, observation } = fixture();
+    master.Title = "Current policy"; observation.Title = "Current user";
+    expect((await reader.read(policyId, signal()))).toMatchObject({
+      policy: { displayName: "Current policy" }, observations: [{ displayName: "Current user" }],
+    });
+    delete master.DisplayName; delete observation.DisplayName;
+    expect((await reader.read(policyId, signal()))).toMatchObject({
+      policy: { displayName: "Current policy" }, observations: [{ displayName: "Current user" }],
+    });
+    observation.Title = userId;
+    expect((await reader.read(policyId, signal())).observations[0].displayName).toBeNull();
+  });
   it("allows prototype owner reads without ACL readiness but retains policy filtering and authorization checks", async () => {
     const { graph, transport } = fixture();
     const prototype: ReportingSettings = { ...settings, accessMode: "prototype", securityReady: false, isAdmin: false, policyIds: [policyId] };

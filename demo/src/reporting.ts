@@ -72,7 +72,7 @@ export class SharePointReporting {
     }
     if (!this.settings.isAdmin && !this.settings.policyIds.includes(id)) throw new Error("SharePoint returned a policy outside your authorized workspace.");
     const active = optional(row.ActiveSnapshotId, "Active snapshot ID");
-    const base = { id, displayName: optional(row.DisplayName ?? row.Title, "Policy name") ?? id,
+    const base = { id, displayName: optional(row.Title, "Policy name") ?? optional(row.DisplayName, "Legacy policy name") ?? id,
       stale: row.Presence === "stale" };
     if (!active) return { ...base, activeSnapshotId: null, observedAt: null, startedAt: null,
       configuration: null, totals: null, coverage: null, jobId: null };
@@ -159,7 +159,9 @@ export class SharePointReporting {
     if (allowed !== "true" && allowed !== "false" && allowed !== "not-reported") throw new Error("Invalid consumption-allowed marker.");
     if (match === "no-balance" && (row.ConsumedQuantity != null || row.Unit != null ||
         remainingKind !== "missing" || row.RemainingValue != null || allowed !== "not-reported")) throw new Error("A missing-balance row contains contradictory quantities or access flags.");
-    return { userId: guid(row.UserId, "Snapshot user ID"), displayName: optional(row.DisplayName, "User display name"),
+    const userId = guid(row.UserId, "Snapshot user ID");
+    const title = optional(row.Title, "User display name");
+    return { userId, displayName: title === userId ? null : title ?? optional(row.DisplayName, "Legacy user display name"),
       username: optional(row.UserPrincipalName, "User principal name"),
       groups: array(json(row.Groups, "User groups"), "User groups").map((id) => guid(id, "User group ID")),
       serviceId, reportedPolicyId, match, consumed: match === "no-balance" ? null : quantity(row.ConsumedQuantity, "Consumption"),

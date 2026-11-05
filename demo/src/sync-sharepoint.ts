@@ -66,19 +66,20 @@ export class SharePointSync {
     }
     const saved = await this.find(list, field, key, signal);
     if (!saved) throw new Error("SharePoint acknowledged a write but the saved item could not be verified.");
-    if (!Object.entries(fields).every(([name, value]) => sameField(name, saved.fields[name], value))) {
-      throw new Error("SharePoint item changed before the write could be verified.");
+    const mismatches = Object.keys(fields).filter((name) => !sameField(name, saved.fields[name], fields[name]));
+    if (mismatches.length) {
+      throw new Error(`SharePoint item write could not be verified. Fields did not match: ${mismatches.join(", ")}. The write may have succeeded; refresh task status before resuming.`);
     }
     return saved;
   }
   async validate(signal: AbortSignal): Promise<string[]> {
     const requirements = [
-      [this.settings.policyListId, "PolicyKey", "ActiveSnapshotId", "FenceId", "Configuration", "Totals", "Coverage", "TenantId",
-        "PolicyId", "DisplayName", "PolicyType", "JobId", "Presence", "StartedAt", "ObservedAt", "LastInventoryAt", "SchemaVersion"],
-      [this.settings.balanceListId, "ObservationKey", "SnapshotKey", "PolicyKey", "SnapshotId", "UserId", "ServiceId",
-        "TenantId", "PolicyId", "JobId", "DisplayName", "UserPrincipalName", "Groups", "ReportedPolicyId", "PolicyMatch",
+      [this.settings.policyListId, "PolicyKey", "Title", "ActiveSnapshotId", "FenceId", "Configuration", "Totals", "Coverage", "TenantId",
+        "PolicyId", "PolicyType", "JobId", "Presence", "StartedAt", "ObservedAt", "LastInventoryAt", "SchemaVersion"],
+      [this.settings.balanceListId, "ObservationKey", "Title", "SnapshotKey", "PolicyKey", "SnapshotId", "UserId", "ServiceId",
+        "TenantId", "PolicyId", "JobId", "UserPrincipalName", "Groups", "ReportedPolicyId", "PolicyMatch",
         "ConsumedQuantity", "Unit", "RemainingKind", "RemainingValue", "ConsumptionAllowed", "AccessReason", "SourceTime", "ObservedAt", "SchemaVersion"],
-      [this.settings.jobListId, "JobId", "TenantId", "State", "UpdatedAt", "Revision", "Outcomes", "ScopePolicyId",
+      [this.settings.jobListId, "JobId", "Title", "TenantId", "State", "UpdatedAt", "Revision", "Outcomes", "ScopePolicyId",
         "Concurrency", "InitiatorId", "ExecutorId", "Actors", "CreatedAt", "FinishedAt", "Phase", "PolicyCount", "CompletedCount", "FailedCount", "SchemaVersion"],
     ];
     for (const [list, key, ...required] of requirements) {
@@ -157,7 +158,7 @@ export class SharePointSync {
       await this.write(this.settings.balanceListId, "ObservationKey", key, {
         Title: row.displayName ?? row.userId, ObservationKey: key, SnapshotKey: snapshotKey, PolicyKey: fence.key,
         TenantId: job.tenantId, PolicyId: policy.id, SnapshotId: snapshotId, JobId: job.id, UserId: row.userId,
-        ServiceId: row.serviceId, DisplayName: row.displayName, UserPrincipalName: row.username, Groups: jsonField(row.groups),
+        ServiceId: row.serviceId, UserPrincipalName: row.username, Groups: jsonField(row.groups),
         ReportedPolicyId: row.reportedPolicyId, PolicyMatch: row.match, ConsumedQuantity: row.consumed, Unit: row.unit,
         RemainingKind: row.remainingKind, RemainingValue: row.remaining,
         ConsumptionAllowed: row.allowed === null ? "not-reported" : String(row.allowed),
@@ -170,7 +171,7 @@ export class SharePointSync {
     }
     await checkLease();
     const current = await this.find(this.settings.policyListId, "PolicyKey", fence.key, signal);
-    const protectedFields = ["Title", "PolicyKey", "TenantId", "PolicyId", "SchemaVersion", "FenceId", "DisplayName",
+    const protectedFields = ["Title", "PolicyKey", "TenantId", "PolicyId", "SchemaVersion", "FenceId",
       "PolicyType", "ActiveSnapshotId", "JobId", "Configuration", "Totals", "Coverage", "Presence", "StartedAt", "ObservedAt", "LastInventoryAt"];
     if (!current || !protectedFields.every((name) => sameField(name, current.fields[name], before.fields[name]))) {
       throw new Error("SharePoint publication fence or content changed while verifying permissions. The previous snapshot was preserved.");
@@ -179,7 +180,7 @@ export class SharePointSync {
       .filter((tier) => budget.tiers[tier].policyId.toLowerCase() === policy.id)
       .map((tier) => ({ budgetId: budget.id, tier, businessArea: budget.businessArea, costCenter: budget.costCenter, owners: budget.owners }))) ?? [];
     await this.write(this.settings.policyListId, "PolicyKey", fence.key, {
-      Title: text(snapshot.policy.displayName, "Policy name"), DisplayName: text(snapshot.policy.displayName, "Policy name"),
+      Title: text(snapshot.policy.displayName, "Policy name"),
       PolicyType: typeof snapshot.policy["@odata.type"] === "string" ? snapshot.policy["@odata.type"] : policy.type,
       ActiveSnapshotId: snapshotId,
       JobId: job.id, Configuration: jsonField({ policy: snapshot.policy, services: snapshot.services, groups: snapshot.groups, mappings }),

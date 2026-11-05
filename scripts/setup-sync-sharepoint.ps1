@@ -34,7 +34,6 @@ function Get-SyncListDefinitions {
         New-SyncColumn PolicyKey -Unique
         New-SyncColumn TenantId -Indexed
         New-SyncColumn PolicyId
-        New-SyncColumn DisplayName
         New-SyncColumn PolicyType
         New-SyncColumn ActiveSnapshotId
         New-SyncColumn JobId
@@ -58,7 +57,6 @@ function Get-SyncListDefinitions {
         New-SyncColumn JobId
         New-SyncColumn UserId
         New-SyncColumn ServiceId
-        New-SyncColumn DisplayName
         New-SyncColumn UserPrincipalName
         New-SyncColumn Groups json
         New-SyncColumn ReportedPolicyId
